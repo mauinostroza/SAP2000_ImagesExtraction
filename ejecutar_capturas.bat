@@ -55,7 +55,7 @@ if not exist "%EXCEL_CONFIG%" (
 
 if defined EXE_PATH (
     echo Ejecutando capturas SAP2000 con EXE...
-    "%EXE_PATH%" --config "%EXCEL_CONFIG%" %*
+    "%EXE_PATH%" --config "%EXCEL_CONFIG%" --allow-unsafe-output %*
 ) else (
     python --version >nul 2>&1
     if %errorlevel% neq 0 (
@@ -77,7 +77,7 @@ if defined EXE_PATH (
     )
 
     echo Ejecutando capturas SAP2000 con Python...
-    python sap_imagenes.py --config "%EXCEL_CONFIG%" %*
+    python sap_imagenes.py --config "%EXCEL_CONFIG%" --allow-unsafe-output %*
 )
 
 if %errorlevel% equ 0 (
