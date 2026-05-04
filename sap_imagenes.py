@@ -5,7 +5,8 @@ Captura automática de imágenes de SAP2000 v23 — integración con Excel
 =============================================================================
 
 DESCRIPCIÓN:
-  Lee una tabla de configuración desde el Excel que lo invoca (via xlwings),
+  Lee una tabla de configuración desde un archivo Excel por CLI
+  o, de forma opcional, desde un workbook abierto vía xlwings,
   se conecta a SAP2000 en ejecución, aplica cada combinación de:
     - Vista del modelo (planta, elevaciones, isométricos, ángulo personalizado)
     - Modo de display (geometría del modelo o cargas de un patrón específico)
@@ -13,15 +14,11 @@ DESCRIPCIÓN:
   y guarda las imágenes PNG en la misma carpeta del Excel.
 
 REQUISITOS (instalar con pip):
-  pip install comtypes pywin32 Pillow xlwings pyautogui openpyxl
+  pip install comtypes pywin32 Pillow pyautogui openpyxl
+  pip install xlwings   # solo si se usará integración opcional con workbook abierto
 
-CÓMO LLAMAR DESDE EXCEL (macro VBA):
-  Sub CapturarImagenes()
-      RunPython "import sap_imagenes; sap_imagenes.main()"
-  End Sub
-
-  También se puede ejecutar directamente:
-      python sap_imagenes.py
+EJECUCIÓN DIRECTA:
+  python sap_imagenes.py --config SAP2000_Capturas.xlsx
 =============================================================================
 """
 
@@ -30,52 +27,99 @@ import sys
 import time
 import logging
 import traceback
+import tempfile
 from pathlib import Path
-from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# Importaciones de terceros — capturar errores de instalación temprano
+# Importaciones de terceros
 # ---------------------------------------------------------------------------
-try:
-    import comtypes.client
-    import comtypes
-except ImportError:
-    raise ImportError("Instala comtypes:  pip install comtypes")
-
-try:
-    import win32gui
-    import win32con
-    import win32ui
-    import win32api
-    from ctypes import windll
-except ImportError:
-    raise ImportError("Instala pywin32:  pip install pywin32")
-
-try:
-    from PIL import Image, ImageGrab
-except ImportError:
-    raise ImportError("Instala Pillow:  pip install Pillow")
-
-try:
-    import pyautogui
-    pyautogui.FAILSAFE = True   # Mover el mouse a la esquina sup-izq para abortar
-    pyautogui.PAUSE = 0.15
-except ImportError:
-    raise ImportError("Instala pyautogui:  pip install pyautogui")
-
-try:
-    import xlwings as xw
-except ImportError:
-    raise ImportError("Instala xlwings:  pip install xlwings")
-
 try:
     import openpyxl
-    from openpyxl.styles import (Font, PatternFill, Alignment,
-                                  Border, Side, GradientFill)
-    from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.datavalidation import DataValidation
 except ImportError:
     raise ImportError("Instala openpyxl:  pip install openpyxl")
+
+comtypes = None
+win32gui = None
+win32con = None
+Image = None
+pyautogui = None
+xw = None
+
+
+def _ensure_comtypes():
+    global comtypes
+    if comtypes is not None:
+        return comtypes
+    try:
+        import comtypes.client as comtypes_client
+        import comtypes as _comtypes
+    except ImportError as exc:
+        raise ImportError("Instala comtypes:  pip install comtypes") from exc
+
+    _comtypes.client = comtypes_client
+    comtypes = _comtypes
+    return comtypes
+
+
+def _ensure_windows_capture_libs():
+    global win32gui, win32con, Image
+    if all(mod is not None for mod in (win32gui, win32con, Image)):
+        return
+
+    try:
+        import win32gui as _win32gui
+        import win32con as _win32con
+    except ImportError as exc:
+        raise ImportError("Instala pywin32:  pip install pywin32") from exc
+
+    try:
+        from PIL import Image as _Image
+    except ImportError as exc:
+        raise ImportError("Instala Pillow:  pip install Pillow") from exc
+
+    win32gui = _win32gui
+    win32con = _win32con
+    Image = _Image
+
+
+def _ensure_pillow():
+    global Image
+    if Image is not None:
+        return Image
+    try:
+        from PIL import Image as _Image
+    except ImportError as exc:
+        raise ImportError("Instala Pillow:  pip install Pillow") from exc
+    Image = _Image
+    return Image
+
+
+def _ensure_pyautogui():
+    global pyautogui
+    if pyautogui is not None:
+        return pyautogui
+    try:
+        import pyautogui as _pyautogui
+    except ImportError as exc:
+        raise ImportError("Instala pyautogui:  pip install pyautogui") from exc
+
+    _pyautogui.FAILSAFE = True
+    _pyautogui.PAUSE = 0.15
+    pyautogui = _pyautogui
+    return pyautogui
+
+
+def _ensure_xlwings():
+    global xw
+    if xw is not None:
+        return xw
+    try:
+        import xlwings as _xw
+    except ImportError as exc:
+        raise ImportError("Instala xlwings:  pip install xlwings") from exc
+
+    xw = _xw
+    return xw
 
 # ---------------------------------------------------------------------------
 # Configuración global
@@ -123,6 +167,126 @@ logging.basicConfig(
 )
 log = logging.getLogger("sap_imagenes")
 
+SAFE_OUTPUT_ENVVAR = "SAP2000_ALLOW_UNSAFE_OUTPUT"
+
+
+def permitir_salida_insegura(explicito: bool = False) -> bool:
+    """Permite rutas de salida fuera de la carpeta base solo con opt-in claro."""
+    if explicito:
+        return True
+    return valor_verdadero(os.environ.get(SAFE_OUTPUT_ENVVAR, ""))
+
+
+def _resolver_hijo_seguro(base_dir: str, ruta_configurada: str) -> str:
+    base_path = Path(base_dir).resolve()
+    destino = (base_path / ruta_configurada).resolve()
+    try:
+        destino.relative_to(base_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"La ruta de salida '{ruta_configurada}' sale de la carpeta base '{base_path}'."
+        ) from exc
+    return str(destino)
+
+
+def valor_verdadero(valor) -> bool:
+    """Normaliza celdas SI/NO o booleanos a bool."""
+    return str(valor).upper().strip() in ("SI", "SÍ", "YES", "1", "TRUE", "X")
+
+
+def validar_tipo_vista(tipo_vista: str) -> str:
+    tipo_vista = str(tipo_vista or "ISO_NE").upper().strip()
+    if tipo_vista not in VISTAS_VALIDAS:
+        raise ValueError(
+            f"Vista inválida: '{tipo_vista}'. "
+            f"Opciones válidas: {', '.join(VISTAS_VALIDAS.keys())}"
+        )
+    return tipo_vista
+
+
+def normalizar_crop(rect_parcial):
+    """Normaliza y valida un crop porcentual (izq, sup, der, inf)."""
+    if rect_parcial is None:
+        return None
+    try:
+        iz, su, de, inf_ = [max(0.0, min(100.0, float(v))) for v in rect_parcial]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Crop inválido: {rect_parcial}") from exc
+    if de <= iz or inf_ <= su:
+        raise ValueError(
+            f"Crop inválido: {rect_parcial}. "
+            "Se requiere der > izq e inf > sup."
+        )
+    return (iz, su, de, inf_)
+
+
+def cargar_fila_captura(fila: int, valores) -> dict:
+    """Construye y valida una fila de configuración desde una secuencia de valores."""
+    cfg = {
+        "activo":        valor_verdadero(valores[0]),
+        "nombre_imagen": str(valores[1] or "imagen").strip(),
+        "tipo_vista":    validar_tipo_vista(valores[2]),
+        "azimut":        float(valores[3] or 225),
+        "elevacion":     float(valores[4] or 30),
+        "modo_display":  str(valores[5] or DISPLAY_MODELO).upper().strip(),
+        "patron_carga":  str(valores[6] or "").strip(),
+        "ventana":       str(valores[7] or "COMPLETA").upper().strip(),
+        "_fila":         fila,
+    }
+    if cfg["modo_display"] not in (DISPLAY_MODELO, DISPLAY_CARGAS):
+        raise ValueError(
+            f"Modo display inválido en fila {fila}: '{cfg['modo_display']}'. "
+            f"Usa {DISPLAY_MODELO} o {DISPLAY_CARGAS}."
+        )
+    if cfg["ventana"] not in ("COMPLETA", "PARCIAL"):
+        raise ValueError(
+            f"Tipo de ventana inválido en fila {fila}: '{cfg['ventana']}'. "
+            "Usa COMPLETA o PARCIAL."
+        )
+    if cfg["modo_display"] == DISPLAY_CARGAS and not cfg["patron_carga"]:
+        raise ValueError(
+            f"Fila {fila}: display=CARGAS requiere un patrón de carga."
+        )
+    if cfg["ventana"] == "PARCIAL":
+        cfg["crop"] = normalizar_crop((
+            valores[8] or 0,
+            valores[9] or 0,
+            valores[10] or 100,
+            valores[11] or 100,
+        ))
+    else:
+        cfg["crop"] = None
+    return cfg
+
+
+def resolver_carpeta_salida(
+    base_dir: str,
+    carpeta_configurada: str,
+    allow_unsafe: bool = False,
+) -> str:
+    """
+    Resuelve la carpeta de salida en modo seguro por defecto.
+
+    Solo se aceptan subdirectorios dentro de ``base_dir`` salvo opt-in explícito.
+    """
+    carpeta_configurada = str(carpeta_configurada or "Capturas_SAP").strip()
+    if not carpeta_configurada:
+        carpeta_configurada = "Capturas_SAP"
+
+    if allow_unsafe:
+        ruta = Path(carpeta_configurada)
+        if not ruta.is_absolute():
+            ruta = Path(base_dir) / ruta
+        return str(ruta.resolve())
+
+    if os.path.isabs(carpeta_configurada):
+        raise ValueError(
+            "Las rutas absolutas de salida están deshabilitadas en modo seguro. "
+            "Usa una subcarpeta relativa o habilita la salida insegura explícitamente."
+        )
+
+    return _resolver_hijo_seguro(base_dir, carpeta_configurada)
+
 
 # =============================================================================
 #  BLOQUE 1 — Conexión a SAP2000
@@ -139,11 +303,13 @@ class SAP2000Conector:
     def conectar(self) -> "SAP2000Conector":
         """Conecta a SAP2000. Lanza RuntimeError si no está abierto."""
         log.info("Conectando a SAP2000...")
+        _ensure_comtypes()
 
         # Generar wrappers comtypes la primera vez (idempotente luego)
+        sap_gen = None
         if os.path.exists(self.dll_path):
             try:
-                comtypes.client.GetModule(self.dll_path)
+                sap_gen = comtypes.client.GetModule(self.dll_path)
             except Exception:
                 pass  # Los wrappers ya existen — ignorar
 
@@ -157,8 +323,10 @@ class SAP2000Conector:
             )
 
         try:
-            import comtypes.gen.SAP2000v1 as sap_gen
-            helper = helper.QueryInterface(sap_gen.cHelper)
+            if sap_gen is None and os.path.exists(self.dll_path):
+                sap_gen = comtypes.client.GetModule(self.dll_path)
+            if sap_gen is not None:
+                helper = helper.QueryInterface(sap_gen.cHelper)
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
             raise RuntimeError(
@@ -171,9 +339,12 @@ class SAP2000Conector:
         log.info("Conexión a SAP2000 establecida ✓")
 
         # Verificar que hay un modelo abierto
-        nombre = ""
         try:
-            self.sap_model.GetModelFilename(nombre)
+            model_filename = self.sap_model.GetModelFilename()
+            if isinstance(model_filename, (list, tuple)):
+                model_filename = next((v for v in model_filename if isinstance(v, str)), "")
+            if not model_filename:
+                log.warning("SAP2000 respondió, pero no devolvió una ruta de modelo abierta.")
         except Exception:
             pass
 
@@ -185,9 +356,10 @@ class SAP2000Conector:
 # =============================================================================
 
 class VentanaCaptura:
-    """Localiza la ventana de SAP2000 y captura su área de dibujo."""
+    """Localiza la ventana de SAP2000 y exporta imágenes del viewport."""
 
     def __init__(self):
+        _ensure_windows_capture_libs()
         self.hwnd_principal = None     # Ventana principal SAP2000
         self.hwnd_viewport  = None     # Ventana hijo del viewport 3D
 
@@ -229,91 +401,268 @@ class VentanaCaptura:
         except Exception as e:
             log.warning(f"No se pudo activar la ventana: {e}")
 
+    def _hwnd_en_raiz(self, hwnd: int) -> int:
+        """Devuelve la ventana raíz para comparar foco real contra la principal."""
+        if not hwnd:
+            return 0
+        try:
+            return win32gui.GetAncestor(hwnd, win32con.GA_ROOT)
+        except Exception:
+            return hwnd
+
+    def asegurar_enfoque_estricto(self):
+        """
+        Verifica que SAP2000 tenga el foco antes de enviar automatización.
+
+        Si no logra recuperar el foco confirmado, aborta para no teclear sobre
+        otra ventana del usuario.
+        """
+        if not self.hwnd_principal:
+            self.buscar_ventana()
+
+        for _ in range(3):
+            self.activar()
+            hwnd_foreground = win32gui.GetForegroundWindow()
+            if self._hwnd_en_raiz(hwnd_foreground) == self._hwnd_en_raiz(self.hwnd_principal):
+                return
+            time.sleep(0.25)
+
+        titulo = ""
+        try:
+            titulo = win32gui.GetWindowText(win32gui.GetForegroundWindow())
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Se abortó la automatización porque SAP2000 no quedó en primer plano. "
+            f"Ventana activa actual: '{titulo}'."
+        )
+
     def capturar(
         self,
         filepath: str,
         rect_parcial: tuple = None
     ) -> bool:
         """
-        Captura la ventana SAP2000 y guarda como PNG.
+        Exporta la vista actual de SAP2000 y guarda en el formato solicitado.
 
         Args:
-            filepath:      Ruta completa del archivo PNG a guardar.
+            filepath:      Ruta completa del archivo de salida.
             rect_parcial:  (izq%, sup%, der%, inf%) en % [0-100]
-                           para recortar el interior de la ventana.
-                           None = captura completa.
+                           para recortar la imagen exportada.
+                           None = exportación completa.
         Returns:
-            True si la captura fue exitosa.
+            True si la exportación fue exitosa.
         """
         if not self.hwnd_principal:
             self.buscar_ventana()
 
-        hwnd = self.hwnd_principal
+        destino = Path(filepath)
+        destino.parent.mkdir(parents=True, exist_ok=True)
 
-        # Coordenadas absolutas de la ventana en pantalla
+        bmp_temporal = None
         try:
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        except Exception as e:
-            log.error(f"GetWindowRect falló: {e}")
-            return False
+            if destino.suffix.lower() == ".bmp" and rect_parcial is None:
+                bmp_origen = destino
+            else:
+                with tempfile.NamedTemporaryFile(
+                    prefix="sap_capture_",
+                    suffix=".bmp",
+                    dir=str(destino.parent),
+                    delete=False,
+                ) as tmp_file:
+                    bmp_temporal = Path(tmp_file.name)
+                bmp_origen = bmp_temporal
 
-        w = right  - left
-        h = bottom - top
+            self._capturar_desde_sap_a_bmp(str(bmp_origen))
 
-        if w <= 10 or h <= 10:
-            log.error("La ventana de SAP2000 parece estar minimizada o es muy pequeña.")
-            return False
-
-        # ── Capturar usando PrintWindow (funciona aunque esté parcialmente cubierta) ──
-        try:
-            hwnd_dc    = win32gui.GetWindowDC(hwnd)
-            mfc_dc     = win32ui.CreateDCFromHandle(hwnd_dc)
-            save_dc    = mfc_dc.CreateCompatibleDC()
-            save_bmp   = win32ui.CreateBitmap()
-            save_bmp.CreateCompatibleBitmap(mfc_dc, w, h)
-            save_dc.SelectObject(save_bmp)
-
-            # PW_RENDERFULLCONTENT = 0x00000002  (flag para ventanas con DWM)
-            result = windll.user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), 2)
-
-            bmpinfo = save_bmp.GetInfo()
-            bmpstr  = save_bmp.GetBitmapBits(True)
-            img = Image.frombuffer(
-                "RGB",
-                (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
-                bmpstr, "raw", "BGRX", 0, 1
+            return self._postprocesar_exportacion(
+                bmp_path=str(bmp_origen),
+                filepath=str(destino),
+                rect_parcial=rect_parcial,
             )
-
-            # Liberar recursos GDI
-            win32gui.DeleteObject(save_bmp.GetHandle())
-            save_dc.DeleteDC()
-            mfc_dc.DeleteDC()
-            win32gui.ReleaseDC(hwnd, hwnd_dc)
-
         except Exception as e:
-            log.warning(f"PrintWindow falló ({e}). Usando ImageGrab como fallback.")
-            # Fallback: ImageGrab (requiere que la ventana sea visible y no esté cubierta)
-            img = ImageGrab.grab(bbox=(left, top, right, bottom))
+            log.error(f"Error al exportar imagen: {e}")
+            return False
+        finally:
+            if bmp_temporal is not None and bmp_temporal.exists():
+                try:
+                    bmp_temporal.unlink()
+                except Exception:
+                    pass
 
-        # ── Aplicar recorte parcial si se especificó ──
+    def _capturar_desde_sap_a_bmp(self, bmp_path: str):
+        """Ejecuta File > Capture Picture y guarda el BMP mediante el cuadro Save As."""
+        pyautogui_local = _ensure_pyautogui()
+
+        self.asegurar_enfoque_estricto()
+        self._eliminar_si_existe(bmp_path)
+
+        menu_id = self._buscar_menu_capture_picture()
+        if menu_id is None:
+            raise RuntimeError("No se encontró el comando 'Capture Picture' en el menú File.")
+
+        win32gui.PostMessage(self.hwnd_principal, win32con.WM_COMMAND, menu_id, 0)
+
+        dialogo = self._esperar_dialogo_guardado()
+        self._guardar_dialogo_como(dialogo, bmp_path, pyautogui_local)
+
+        if not self._esperar_archivo(bmp_path, timeout=20.0):
+            raise RuntimeError("SAP2000 no generó el BMP dentro del tiempo esperado.")
+
+        log.info(f"  → BMP exportado desde SAP2000: {os.path.basename(bmp_path)}")
+
+    def _buscar_menu_capture_picture(self):
+        """Busca el comando Capture Picture dentro del menú File."""
+        menu_raiz = win32gui.GetMenu(self.hwnd_principal)
+        if not menu_raiz:
+            return None
+
+        try:
+            menu_file = win32gui.GetSubMenu(menu_raiz, 0)
+        except Exception:
+            menu_file = None
+        if not menu_file:
+            return None
+
+        total = win32gui.GetMenuItemCount(menu_file)
+        for idx in range(total):
+            try:
+                texto = win32gui.GetMenuString(menu_file, idx, win32con.MF_BYPOSITION)
+            except Exception:
+                continue
+            normalizado = texto.replace("&", "").strip().lower()
+            if "capture picture" in normalizado:
+                menu_id = win32gui.GetMenuItemID(menu_file, idx)
+                if menu_id != -1:
+                    return menu_id
+        return None
+
+    def _esperar_dialogo_guardado(self, timeout: float = 8.0) -> int:
+        """Espera el cuadro Save As disparado por Capture Picture."""
+        deadline = time.time() + timeout
+        candidato = 0
+
+        while time.time() < deadline:
+            ventanas = []
+
+            def _callback(hwnd, _):
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                clase = win32gui.GetClassName(hwnd)
+                if clase != "#32770":
+                    return
+                if self._hwnd_en_raiz(win32gui.GetWindow(hwnd, win32con.GW_OWNER)) != self._hwnd_en_raiz(self.hwnd_principal):
+                    return
+                ventanas.append(hwnd)
+
+            win32gui.EnumWindows(_callback, None)
+            if ventanas:
+                candidato = ventanas[0]
+                break
+            time.sleep(0.2)
+
+        if not candidato:
+            raise RuntimeError("No apareció el cuadro de guardado de SAP2000.")
+
+        return candidato
+
+    def _esperar_archivo(self, ruta: str, timeout: float = 15.0) -> bool:
+        """Espera a que un archivo exista y deje de crecer."""
+        deadline = time.time() + timeout
+        ultimo_tamano = -1
+        estable_desde = 0.0
+
+        while time.time() < deadline:
+            if os.path.exists(ruta):
+                try:
+                    tamano = os.path.getsize(ruta)
+                except OSError:
+                    tamano = -1
+                if tamano > 0 and tamano == ultimo_tamano:
+                    if not estable_desde:
+                        estable_desde = time.time()
+                    elif time.time() - estable_desde >= 0.4:
+                        return True
+                else:
+                    estable_desde = 0.0
+                    ultimo_tamano = tamano
+            time.sleep(0.2)
+        return False
+
+    def _guardar_dialogo_como(self, dialogo: int, ruta: str, pyautogui_local):
+        """Completa el Save As usando controles nativos; si falla, usa teclado."""
+        try:
+            win32gui.SetForegroundWindow(dialogo)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+        edit = self._buscar_control_dialogo(dialogo, ("Edit",))
+        if edit:
+            try:
+                win32gui.SetWindowText(edit, ruta)
+                win32gui.SendMessage(dialogo, win32con.WM_COMMAND, win32con.IDOK, 0)
+                return
+            except Exception:
+                pass
+
+        pyautogui_local.hotkey("ctrl", "l")
+        time.sleep(0.1)
+        pyautogui_local.hotkey("ctrl", "a")
+        pyautogui_local.write(ruta, interval=0.01)
+        time.sleep(0.1)
+        pyautogui_local.press("enter")
+
+    def _buscar_control_dialogo(self, hwnd_padre: int, clases_objetivo: tuple[str, ...]) -> int:
+        """Busca recursivamente el primer control cuya clase esté en la lista dada."""
+        encontrado = 0
+
+        def _callback(hwnd, _):
+            nonlocal encontrado
+            if encontrado:
+                return False
+            try:
+                clase = win32gui.GetClassName(hwnd)
+            except Exception:
+                return True
+            if clase in clases_objetivo:
+                encontrado = hwnd
+                return False
+            return True
+
+        try:
+            win32gui.EnumChildWindows(hwnd_padre, _callback, None)
+        except Exception:
+            return 0
+        return encontrado
+
+    def _postprocesar_exportacion(self, bmp_path: str, filepath: str, rect_parcial: tuple = None) -> bool:
+        """Convierte el BMP exportado y aplica recorte si corresponde."""
+        image_lib = _ensure_pillow()
+
+        with image_lib.open(bmp_path) as img_bmp:
+            img = img_bmp.copy()
+
         if rect_parcial is not None:
-            iz, su, de, in_ = [max(0, min(100, v)) for v in rect_parcial]
+            iz, su, de, in_ = normalizar_crop(rect_parcial)
             iw, ih = img.size
             crop_l = int(iw * iz / 100)
             crop_t = int(ih * su / 100)
             crop_r = int(iw * de / 100)
             crop_b = int(ih * in_ / 100)
-            if crop_r > crop_l and crop_b > crop_t:
-                img = img.crop((crop_l, crop_t, crop_r, crop_b))
+            img = img.crop((crop_l, crop_t, crop_r, crop_b))
 
-        # ── Guardar ──
+        extension = Path(filepath).suffix.lower()
+        formato = "BMP" if extension == ".bmp" else "PNG"
+        img.save(filepath, formato)
+        log.info(f"  → Guardado: {os.path.basename(filepath)}  ({img.size[0]}×{img.size[1]} px)")
+        return True
+
+    def _eliminar_si_existe(self, ruta: str):
         try:
-            img.save(filepath, "PNG")
-            log.info(f"  → Guardado: {os.path.basename(filepath)}  ({img.size[0]}×{img.size[1]} px)")
-            return True
-        except Exception as e:
-            log.error(f"Error al guardar imagen: {e}")
-            return False
+            os.remove(ruta)
+        except FileNotFoundError:
+            return
 
 
 # =============================================================================
@@ -332,6 +681,7 @@ class GestorVistas:
     """
 
     def __init__(self, sap_model, ventana: VentanaCaptura):
+        _ensure_pyautogui()
         self.sap_model = sap_model
         self.ventana   = ventana
 
@@ -362,7 +712,7 @@ class GestorVistas:
             az, el = VISTA_ANGULOS.get(tipo_vista, (225, 30))
 
         log.info(f"  Configurando vista: {tipo_vista}  (az={az}°, el={el}°)")
-        self.ventana.activar()
+        self.ventana.asegurar_enfoque_estricto()
 
         # ── Abrir diálogo "Set 3D View" de SAP2000 via menú View ──
         self._abrir_dialogo_set3dview()
@@ -380,6 +730,7 @@ class GestorVistas:
         Usa Alt+teclas para navegar el menú sin depender de coordenadas de pantalla.
         """
         hwnd = self.ventana.hwnd_principal
+        self.ventana.asegurar_enfoque_estricto()
         win32gui.SetForegroundWindow(hwnd)
         time.sleep(0.25)
 
@@ -415,17 +766,20 @@ class GestorVistas:
         El diálogo tiene dos campos: Plan Rotation (azimut) y Elevation.
         """
         try:
+            azimut_txt = f"{float(azimut):g}"
+            elevacion_txt = f"{float(elevacion):g}"
+
             # Tab para saltar entre campos del diálogo
             # Campo 1: Plan Rotation (Azimut)
             pyautogui.hotkey("ctrl", "a")      # Seleccionar todo en el campo activo
-            pyautogui.write(str(int(azimut)), interval=0.05)
+            pyautogui.write(azimut_txt, interval=0.05)
             time.sleep(0.15)
             pyautogui.press("tab")             # Siguiente campo
 
             # Campo 2: Elevation
             time.sleep(0.15)
             pyautogui.hotkey("ctrl", "a")
-            pyautogui.write(str(int(elevacion)), interval=0.05)
+            pyautogui.write(elevacion_txt, interval=0.05)
             time.sleep(0.15)
 
             # Confirmar con Enter o botón OK
@@ -454,6 +808,7 @@ class GestorDisplay:
     """
 
     def __init__(self, sap_model, ventana: VentanaCaptura):
+        _ensure_pyautogui()
         self.sap_model = sap_model
         self.ventana   = ventana
 
@@ -481,13 +836,16 @@ class GestorDisplay:
             patron: nombre del patrón de carga (ej: "DEAD", "LIVE", "SISMO_X")
         """
         log.info(f"  Display: Cargas del patrón '{patron}'")
-        self.ventana.activar()
+        self.ventana.asegurar_enfoque_estricto()
 
         # Verificar que el patrón existe
         try:
-            num_lp = 0
+            response = self.sap_model.LoadPatterns.GetNameList()
             lp_names = []
-            self.sap_model.LoadPatterns.GetNameList(num_lp, lp_names)
+            if isinstance(response, (list, tuple)):
+                for value in response:
+                    if isinstance(value, (list, tuple)):
+                        lp_names.extend(str(item) for item in value)
             if lp_names and patron not in lp_names:
                 log.warning(
                     f"  ¡Patrón '{patron}' no encontrado! "
@@ -511,6 +869,7 @@ class GestorDisplay:
         Luego selecciona el patrón en el cuadro de diálogo.
         """
         hwnd = self.ventana.hwnd_principal
+        self.ventana.asegurar_enfoque_estricto()
         win32gui.SetForegroundWindow(hwnd)
         time.sleep(0.25)
 
@@ -636,16 +995,23 @@ class GeneradorImagenes:
         if not config.get("activo", True):
             return {"ok": False, "archivo": "", "mensaje": "INACTIVO"}
 
-        tipo_vista   = config.get("tipo_vista",   "ISO_NE").upper()
+        tipo_vista   = validar_tipo_vista(config.get("tipo_vista", "ISO_NE"))
         azimut       = float(config.get("azimut",    225))
         elevacion    = float(config.get("elevacion",  30))
         modo_display = config.get("modo_display", DISPLAY_MODELO).upper()
         patron_carga = config.get("patron_carga", "").strip()
         nombre_img   = config.get("nombre_imagen", "imagen").strip()
         ventana_tipo = config.get("ventana", "COMPLETA").upper()
-        crop         = config.get("crop", None)      # (iz%, su%, der%, inf%)
+        crop         = normalizar_crop(config.get("crop", None))
 
         log.info(f"──── Procesando: {nombre_img} ────")
+
+        if modo_display not in (DISPLAY_MODELO, DISPLAY_CARGAS):
+            raise ValueError(f"Modo display inválido: '{modo_display}'")
+        if ventana_tipo not in ("COMPLETA", "PARCIAL"):
+            raise ValueError(f"Tipo de ventana inválido: '{ventana_tipo}'")
+        if modo_display == DISPLAY_CARGAS and not patron_carga:
+            raise ValueError("Display=CARGAS requiere un patrón de carga.")
 
         try:
             # 1. Cambiar vista
@@ -693,12 +1059,12 @@ class GeneradorImagenes:
 
 
 # =============================================================================
-#  BLOQUE 7 — Interfaz Excel (xlwings)
+#  BLOQUE 7 — Integración opcional con workbook abierto (xlwings)
 # =============================================================================
 
-def leer_config_desde_excel(wb) -> dict:
+def leer_config_desde_excel(wb, allow_unsafe_output: bool = False) -> dict:
     """
-    Lee la hoja CONFIG y la tabla de capturas desde el workbook xlwings.
+    Lee la hoja CONFIG y la tabla de capturas desde un workbook abierto en Excel.
 
     Retorna:
         {
@@ -719,12 +1085,12 @@ def leer_config_desde_excel(wb) -> dict:
         nombre_proy = "Proyecto"
         carpeta_rel = "Capturas_SAP"
 
-    # La carpeta de salida es relativa al Excel (si no es absoluta)
     carpeta_excel = os.path.dirname(wb.fullname)
-    if os.path.isabs(carpeta_rel):
-        carpeta_salida = carpeta_rel
-    else:
-        carpeta_salida = os.path.join(carpeta_excel, carpeta_rel)
+    carpeta_salida = resolver_carpeta_salida(
+        carpeta_excel,
+        carpeta_rel,
+        allow_unsafe=allow_unsafe_output,
+    )
 
     # ── Hoja CAPTURAS ──
     capturas = []
@@ -734,39 +1100,13 @@ def leer_config_desde_excel(wb) -> dict:
         # Leer datos desde fila 3 (la 2 es encabezado)
         fila = 3
         while True:
-            activo = sh_cap.range(f"A{fila}").value
-            if activo is None:
-                break    # Fin de la tabla
-
-            activo_bool = str(activo).upper().strip() in ("SI", "SÍ", "YES", "1", "TRUE", "X")
-
-            cfg = {
-                "activo":        activo_bool,
-                "nombre_imagen": str(sh_cap.range(f"B{fila}").value or "imagen"),
-                "tipo_vista":    str(sh_cap.range(f"C{fila}").value or "ISO_NE").upper(),
-                "azimut":        float(sh_cap.range(f"D{fila}").value or 225),
-                "elevacion":     float(sh_cap.range(f"E{fila}").value or 30),
-                "modo_display":  str(sh_cap.range(f"F{fila}").value or "MODELO").upper(),
-                "patron_carga":  str(sh_cap.range(f"G{fila}").value or ""),
-                "ventana":       str(sh_cap.range(f"H{fila}").value or "COMPLETA").upper(),
-                "_fila":         fila,      # Guardar para escribir resultado
-            }
-
-            # Leer crop si ventana = PARCIAL
-            if cfg["ventana"] == "PARCIAL":
-                try:
-                    cfg["crop"] = (
-                        float(sh_cap.range(f"I{fila}").value or 0),   # iz%
-                        float(sh_cap.range(f"J{fila}").value or 0),   # sup%
-                        float(sh_cap.range(f"K{fila}").value or 100), # der%
-                        float(sh_cap.range(f"L{fila}").value or 100), # inf%
-                    )
-                except Exception:
-                    cfg["crop"] = (0, 0, 100, 100)
-            else:
-                cfg["crop"] = None
-
-            capturas.append(cfg)
+            valores = [sh_cap.range(f"{col}{fila}").value for col in "ABCDEFGHIJKL"]
+            if all(valor in (None, "") for valor in valores):
+                break
+            try:
+                capturas.append(cargar_fila_captura(fila, valores))
+            except Exception as e:
+                log.warning(f"Fila {fila} ignorada por configuración inválida: {e}")
             fila += 1
 
     except Exception as e:
@@ -801,18 +1141,16 @@ def escribir_resultados_en_excel(wb, resultados: list):
 
 def main():
     """
-    Punto de entrada principal — llamado desde la macro VBA del Excel.
-
-    Sub CapturarImagenes()
-        RunPython "import sap_imagenes; sap_imagenes.main()"
-    End Sub
+    Punto de entrada opcional para ejecutar contra un workbook ya abierto.
     """
+    xw_app = _ensure_xlwings()
+
     try:
-        wb = xw.Book.caller()
+        wb = xw_app.Book.caller()
     except Exception:
         # Fallback: usar el primer workbook abierto si no hay caller
         try:
-            wb = xw.books[0]
+            wb = xw_app.books[0]
         except Exception:
             log.error("No se pudo obtener referencia al workbook de Excel.")
             return
@@ -822,7 +1160,14 @@ def main():
     log.info("=" * 60)
 
     # Leer configuración
-    config = leer_config_desde_excel(wb)
+    try:
+        config = leer_config_desde_excel(
+            wb,
+            allow_unsafe_output=permitir_salida_insegura(),
+        )
+    except ValueError as e:
+        log.error(str(e))
+        return
     capturas = config["capturas"]
 
     if not capturas:
@@ -873,7 +1218,7 @@ def crear_excel_configuracion(ruta_excel: str):
     Incluye validaciones de datos, formatos y filas de ejemplo.
 
     Args:
-        ruta_excel: Ruta completa del archivo .xlsm a crear.
+        ruta_excel: Ruta completa del archivo .xlsx a crear.
     """
     from openpyxl import Workbook
     from openpyxl.styles import (Font, PatternFill, Alignment, Border, Side,
@@ -938,8 +1283,8 @@ def crear_excel_configuracion(ruta_excel: str):
     instrucciones = [
         "1. Abre SAP2000 v23 con el modelo que deseas capturar.",
         "2. Completa la hoja CAPTURAS con las vistas que necesitas.",
-        "3. Desde Excel, ejecuta la macro: CapturarImagenes()",
-        "   (pestaña Programador > Macros > CapturarImagenes)",
+        "3. Ejecuta el script o el EXE portable con este archivo como configuración.",
+        "   Ejemplo: sap2000_capture.exe --config SAP2000_Capturas.xlsx",
         "4. Las imágenes PNG se guardarán en la subcarpeta indicada.",
         "",
         "VISTAS disponibles:",
@@ -1083,16 +1428,18 @@ def crear_excel_configuracion(ruta_excel: str):
     # ─────────────────────────────────────────────────────────
     # Guardar
     # ─────────────────────────────────────────────────────────
-    os.makedirs(os.path.dirname(ruta_excel), exist_ok=True)
+    carpeta_destino = os.path.dirname(os.path.abspath(ruta_excel))
+    os.makedirs(carpeta_destino, exist_ok=True)
     wb.save(ruta_excel)
     log.info(f"Excel de configuración creado: {ruta_excel}")
 
 
 # =============================================================================
-#  Punto de entrada directo (python sap_imagenes.py)
+#  CLI
 # =============================================================================
 
-if __name__ == "__main__":
+def main_cli(argv=None) -> int:
+    """CLI reutilizable para Python y para el ejecutable portable."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -1114,63 +1461,74 @@ if __name__ == "__main__":
         default="Modelo",
         help="Nombre del proyecto (prefijo de los archivos).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--allow-unsafe-output",
+        action="store_true",
+        help=(
+            "Permitir una carpeta de salida absoluta o fuera de la carpeta base del Excel. "
+            "Por defecto solo se aceptan subcarpetas seguras."
+        ),
+    )
+    args = parser.parse_args(argv)
 
     if args.crear_excel:
         crear_excel_configuracion(args.crear_excel)
         print(f"Excel creado en: {args.crear_excel}")
-        sys.exit(0)
+        return 0
 
     if args.config:
-        # Leer configuración desde Excel y ejecutar sin xlwings caller
-        import openpyxl as _opx
-        _wb_raw = _opx.load_workbook(args.config, data_only=True)
+        try:
+            # Leer configuración desde Excel y ejecutar sin xlwings caller
+            import openpyxl as _opx
+            _wb_raw = _opx.load_workbook(args.config, data_only=True)
 
-        # Construir config manualmente desde openpyxl
-        sh = _wb_raw["CONFIG"]
-        sap_dll       = sh["B2"].value or SAP_DLL_PATH
-        nombre_proy   = sh["B3"].value or args.proyecto
-        carpeta_rel   = sh["B4"].value or "Capturas_SAP"
-        carpeta_salida = os.path.join(os.path.dirname(args.config), carpeta_rel)
+            # Construir config manualmente desde openpyxl
+            sh = _wb_raw["CONFIG"]
+            sap_dll       = sh["B2"].value or SAP_DLL_PATH
+            nombre_proy   = sh["B3"].value or args.proyecto
+            carpeta_rel   = sh["B4"].value or "Capturas_SAP"
+            carpeta_salida = resolver_carpeta_salida(
+                os.path.dirname(args.config),
+                carpeta_rel,
+                allow_unsafe=permitir_salida_insegura(args.allow_unsafe_output),
+            )
 
-        sh_cap = _wb_raw["CAPTURAS"]
-        capturas = []
-        for fila in range(3, sh_cap.max_row + 1):
-            vals = [sh_cap.cell(fila, c).value for c in range(1, 15)]
-            if vals[0] is None:
-                break
-            activo = str(vals[0]).upper().strip() in ("SI", "SÍ", "YES", "1")
-            cfg = {
-                "activo":        activo,
-                "nombre_imagen": str(vals[1] or "imagen"),
-                "tipo_vista":    str(vals[2] or "ISO_NE").upper(),
-                "azimut":        float(vals[3] or 225),
-                "elevacion":     float(vals[4] or 30),
-                "modo_display":  str(vals[5] or "MODELO").upper(),
-                "patron_carga":  str(vals[6] or ""),
-                "ventana":       str(vals[7] or "COMPLETA").upper(),
-                "_fila":         fila,
-            }
-            if cfg["ventana"] == "PARCIAL":
-                cfg["crop"] = (
-                    float(vals[8] or 0), float(vals[9]  or 0),
-                    float(vals[10] or 100), float(vals[11] or 100),
-                )
-            capturas.append(cfg)
+            sh_cap = _wb_raw["CAPTURAS"]
+            capturas = []
+            for fila in range(3, sh_cap.max_row + 1):
+                vals = [sh_cap.cell(fila, c).value for c in range(1, 13)]
+                if all(valor in (None, "") for valor in vals):
+                    break
+                try:
+                    capturas.append(cargar_fila_captura(fila, vals))
+                except Exception as e:
+                    log.warning(f"Fila {fila} ignorada por configuración inválida: {e}")
 
-        conector = SAP2000Conector(sap_dll)
-        conector.conectar()
-        gen = GeneradorImagenes(conector.sap_model, carpeta_salida, nombre_proy)
-        gen.inicializar()
-        resultados = gen.procesar_lista(capturas)
+            conector = SAP2000Conector(sap_dll)
+            conector.conectar()
+            gen = GeneradorImagenes(conector.sap_model, carpeta_salida, nombre_proy)
+            gen.inicializar()
+            resultados = gen.procesar_lista(capturas)
 
-        ok  = sum(1 for r in resultados if r["ok"])
-        err = len(resultados) - ok
-        print(f"\nResultado: {ok} imágenes OK, {err} errores → {carpeta_salida}")
-        sys.exit(0 if err == 0 else 1)
+            ok  = sum(1 for r in resultados if r["ok"])
+            err = len(resultados) - ok
+            print(f"\nResultado: {ok} imágenes OK, {err} errores → {carpeta_salida}")
+            return 0 if err == 0 else 1
+        except ValueError as e:
+            log.error(str(e))
+            return 2
 
     # Sin argumentos: solo crear el Excel en la carpeta actual
     ruta = os.path.join(os.getcwd(), "SAP2000_Capturas.xlsx")
     crear_excel_configuracion(ruta)
     print(f"Plantilla Excel creada en: {ruta}")
     print("Úsala con: python sap_imagenes.py --config SAP2000_Capturas.xlsx")
+    return 0
+
+
+# =============================================================================
+#  Punto de entrada directo (python sap_imagenes.py)
+# =============================================================================
+
+if __name__ == "__main__":
+    sys.exit(main_cli())

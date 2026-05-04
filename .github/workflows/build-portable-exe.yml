@@ -1,0 +1,63 @@
+name: Build Portable EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-portable-exe.yml"
+      - "sap_imagenes.py"
+      - "sap2000_portable.py"
+      - "sap2000_portable.spec"
+      - "requirements-exe.txt"
+      - "build_exe.bat"
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m venv .build-venv
+
+      - name: Build portable exe
+        run: |
+          build_exe.bat
+
+      - name: Smoke test exe
+        shell: pwsh
+        run: |
+          .\dist\sap2000_capture\sap2000_capture.exe --crear-excel "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
+          if (!(Test-Path "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx")) {
+            throw "No se genero el Excel desde el EXE"
+          }
+
+      - name: Prepare artifact bundle
+        shell: pwsh
+        run: |
+          $bundleDir = "artifact_bundle"
+          if (Test-Path $bundleDir) { Remove-Item $bundleDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $bundleDir | Out-Null
+          Copy-Item "dist/sap2000_capture/*" -Destination $bundleDir -Recurse
+          Copy-Item "README.md" -Destination $bundleDir
+          Copy-Item "SAP2000_Capturas.xlsx" -Destination $bundleDir
+          Compress-Archive -Path "$bundleDir/*" -DestinationPath "sap2000_capture_portable_windows.zip" -Force
+
+      - name: Upload portable exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sap2000-capture-portable-windows
+          path: |
+            sap2000_capture_portable_windows.zip
+            dist/sap2000_capture/**
+          if-no-files-found: error

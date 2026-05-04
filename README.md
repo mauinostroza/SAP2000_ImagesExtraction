@@ -1,200 +1,171 @@
-# SAP2000 Image Capture — Guía completa
+# SAP2000 Image Capture
 
-Captura automática de imágenes de modelos SAP2000 v23, controlada desde Excel.
+Automatiza capturas de SAP2000 a partir de un archivo `SAP2000_Capturas.xlsx`, con ejecución por CLI o por EXE portable.
 
----
+El flujo vigente usa el mecanismo **Capture Picture BMP** de SAP2000 como base de exportación y se controla desde el archivo Excel de configuración. No requiere macros, `xlsm` ni `xlwings` para el uso normal por `--config`.
 
-## Archivos del paquete
+## Archivos relevantes
 
+```text
+README.md
+ejecutar_capturas.bat
+sap_imagenes.py
+crear_excel.py
+build_exe.bat
+sap2000_portable.py
+sap2000_portable.spec
+requirements-exe.txt
 ```
-SAP_Capturas/
-├── sap_imagenes.py          ← Módulo principal (toda la lógica)
-├── crear_excel.py           ← Crea la plantilla Excel desde cero
-├── SAP_Capturas_VBA.bas     ← Módulo VBA para botón en Excel
-├── ejecutar_capturas.bat    ← Ejecutar directamente (sin macro)
-└── README.md
-```
-
----
 
 ## Requisitos
 
 | Requisito | Versión |
-|---|---|
-| Python | 3.8+ (64 bits) |
-| SAP2000 | v23 (puede funcionar en v22/v24 con ajustes) |
+| --- | --- |
 | Windows | 10 o 11 |
+| SAP2000 | v23 |
+| Python | 3.8+ (solo si ejecutas el `.py`) |
 
-### Instalar dependencias Python
+Dependencias Python:
 
 ```bat
-pip install comtypes pywin32 Pillow pyautogui xlwings openpyxl
+python -m pip install comtypes pywin32 Pillow pyautogui openpyxl
 ```
 
----
+## Flujo rápido
 
-## Configuración inicial (una sola vez)
+1. Crea la plantilla Excel.
+2. Completa `CONFIG` y `CAPTURAS`.
+3. Abre SAP2000 con el modelo cargado.
+4. Ejecuta el script, el EXE o `ejecutar_capturas.bat`.
 
-### Paso 1 — Crear el Excel de configuración
+## Crear la plantilla Excel
+
+Con Python:
 
 ```bat
 python crear_excel.py
 ```
 
-Esto crea `SAP2000_Capturas.xlsx` en la misma carpeta del script.
-
-### Paso 2 — Agregar el módulo VBA al Excel
-
-1. Abre `SAP2000_Capturas.xlsx` en Excel
-2. Guárdalo como `.xlsm` (habilitado para macros)
-3. Abre el editor VBA: `Alt + F11`
-4. Haz clic derecho en "VBAProject" > **Importar archivo**
-5. Selecciona `SAP_Capturas_VBA.bas`
-6. Agrega un botón en la hoja CONFIG y asígnale la macro `CapturarImagenes`
-
-### Paso 3 — Instalar xlwings (para el botón Excel)
+O con el EXE:
 
 ```bat
-pip install xlwings
-xlwings addin install
+sap2000_capture.exe --crear-excel SAP2000_Capturas.xlsx
 ```
 
----
+Esto genera `SAP2000_Capturas.xlsx` en la ruta indicada.
 
-## Uso
+## Ejecutar capturas
 
-### Método A — Desde Excel (recomendado)
-
-1. Abre SAP2000 con tu modelo cargado
-2. Abre `SAP2000_Capturas.xlsm`
-3. Completa la hoja **CAPTURAS** (ver sección siguiente)
-4. Haz clic en el botón **"Capturar Imágenes"**
-5. Las imágenes PNG se guardarán en la carpeta indicada en CONFIG
-
-### Método B — Desde línea de comandos
+Con Python:
 
 ```bat
 python sap_imagenes.py --config SAP2000_Capturas.xlsx
 ```
 
-### Método C — Doble clic
+Con EXE portable:
 
-1. Copia `ejecutar_capturas.bat` junto al Excel
-2. Doble clic en el `.bat` (con SAP2000 abierto)
-
----
-
-## Configurar la hoja CAPTURAS
-
-Cada fila de la tabla define una captura. Columnas disponibles:
-
-| Columna | Opciones | Descripción |
-|---|---|---|
-| **ACTIVO** | SI / NO | Activar o desactivar esta captura |
-| **NOMBRE IMAGEN** | texto libre | Nombre base del archivo (sin extensión) |
-| **TIPO VISTA** | `PLANTA` `ELEV_X` `ELEV_Y` `ISO_NE` `ISO_NO` `ISO_SE` `ISO_SO` `CUSTOM` | Ángulo de cámara |
-| **AZIMUT** | 0–360 | Solo para CUSTOM — ángulo horizontal |
-| **ELEVACIÓN** | 0–90 | Solo para CUSTOM — ángulo vertical |
-| **MODO DISPLAY** | `MODELO` / `CARGAS` | Qué mostrar en la vista |
-| **PATRÓN DE CARGA** | nombre del patrón | Solo para DISPLAY=CARGAS (ej: DEAD, LIVE) |
-| **TIPO VENTANA** | `COMPLETA` / `PARCIAL` | Capturar toda la ventana o un recorte |
-| **RECORTE IZQ %** | 0–100 | Solo para PARCIAL |
-| **RECORTE SUP %** | 0–100 | Solo para PARCIAL |
-| **RECORTE DER %** | 0–100 | Solo para PARCIAL (ej: 90 = hasta 90% desde la izq) |
-| **RECORTE INF %** | 0–100 | Solo para PARCIAL |
-
-### Ejemplo de tabla CAPTURAS
-
-| ACTIVO | NOMBRE IMAGEN | TIPO VISTA | AZIMUT | ELEV | DISPLAY | PATRÓN |
-|---|---|---|---|---|---|---|
-| SI | Vista_General | ISO_NE | — | — | MODELO | — |
-| SI | Planta | PLANTA | — | — | MODELO | — |
-| SI | Elevacion_Norte | ELEV_X | — | — | MODELO | — |
-| SI | Cargas_Muertas | ISO_NE | — | — | CARGAS | DEAD |
-| SI | Cargas_Vivas | ISO_NO | — | — | CARGAS | LIVE |
-| SI | Sismo_X_Elev | ELEV_X | — | — | CARGAS | SISMO_X |
-| NO | Vista_Custom | CUSTOM | 45 | 60 | MODELO | — |
-
-Los archivos PNG generados tendrán nombres como:
-```
-MiProyecto_Vista_General_ISO_NE_MODELO.png
-MiProyecto_Cargas_Muertas_ISO_NE_CARGAS_DEAD.png
+```bat
+sap2000_capture.exe --config SAP2000_Capturas.xlsx
 ```
 
----
+Si trabajas dentro del repo tras compilar:
 
-## Ajustar la navegación de menús de SAP2000
-
-El script navega los menús de SAP2000 mediante teclado para cambiar vistas y display.
-La navegación puede variar entre versiones de SAP2000. Si las vistas no cambian
-correctamente, ajusta los **contadores de flechas** en estas funciones de `sap_imagenes.py`:
-
-### `_abrir_dialogo_set3dview()` — para cambiar el ángulo de vista
-
-```python
-# Líneas a ajustar (cuenta los ítems de tu menú View):
-for _ in range(6):       # ← Cambiar este número (ítems hasta "Rotate 3D View")
-    pyautogui.press("down")
-
-for _ in range(5):        # ← Cambiar este número (ítems hasta "Set 3D View...")
-    pyautogui.press("down")
+```bat
+dist\sap2000_capture\sap2000_capture.exe --config SAP2000_Capturas.xlsx
 ```
 
-**Cómo verificarlo**: Abre SAP2000, presiona `Alt+V` para abrir el menú View,
-y cuenta las posiciones hacia abajo hasta llegar a "Set 3D View...".
+Launcher `.bat`:
 
-### `_mostrar_cargas_menu()` — para mostrar cargas
-
-```python
-# Líneas a ajustar (ítems en menú Display):
-for _ in range(2):          # ← Cambiar según posición de "Show Load Assigns"
-    pyautogui.press("down")
+```bat
+ejecutar_capturas.bat
 ```
 
----
+El launcher busca `SAP2000_Capturas.xlsx` en la misma carpeta. Si no existe, intenta crearlo con el EXE y, si no está disponible, con Python.
+
+## Estructura del Excel
+
+### Hoja `CONFIG`
+
+| Celda | Descripción |
+| --- | --- |
+| `B2` | Ruta del DLL de SAP2000 |
+| `B3` | Nombre del proyecto |
+| `B4` | Subcarpeta de salida |
+
+La salida por defecto se guarda en `Capturas_SAP` como subcarpeta del Excel.
+
+### Hoja `CAPTURAS`
+
+Cada fila activa define una imagen a generar.
+
+| Columna | Valor |
+| --- | --- |
+| `ACTIVO` | `SI` / `NO` |
+| `NOMBRE IMAGEN` | Nombre base de la captura |
+| `TIPO VISTA` | `PLANTA`, `ELEV_X`, `ELEV_Y`, `ISO_NE`, `ISO_NO`, `ISO_SE`, `ISO_SO`, `CUSTOM` |
+| `AZIMUT` | Solo para `CUSTOM` |
+| `ELEVACIÓN` | Solo para `CUSTOM` |
+| `MODO DISPLAY` | `MODELO` o `CARGAS` |
+| `PATRÓN DE CARGA` | Requerido si `MODO DISPLAY = CARGAS` |
+| `TIPO VENTANA` | `COMPLETA` o `PARCIAL` |
+| `RECORTE IZQ/SUP/DER/INF %` | Solo para `PARCIAL` |
+
+Ejemplo de salida:
+
+```text
+Capturas_SAP\
+  MiProyecto_Vista_General_ISO_NE_MODELO.png
+  MiProyecto_Cargas_Muertas_ISO_NE_CARGAS_DEAD.png
+```
+
+## Opciones CLI útiles
+
+Crear Excel y salir:
+
+```bat
+sap2000_capture.exe --crear-excel C:\ruta\SAP2000_Capturas.xlsx
+```
+
+Permitir una carpeta de salida absoluta o fuera de la carpeta base del Excel:
+
+```bat
+sap2000_capture.exe --config SAP2000_Capturas.xlsx --allow-unsafe-output
+```
+
+También puedes usar la variable de entorno:
+
+```bat
+set SAP2000_ALLOW_UNSAFE_OUTPUT=1
+```
+
+## EXE portable
+
+Build local:
+
+```bat
+build_exe.bat
+```
+
+Salida:
+
+```text
+dist\sap2000_capture\
+```
+
+El EXE usa la misma CLI que `sap_imagenes.py`.
 
 ## Solución de problemas
 
-| Problema | Causa | Solución |
-|---|---|---|
-| "SAP2000 no detectado" | SAP2000 no está abierto | Abre SAP2000 con el modelo antes |
-| Vista no cambia | Contadores de flechas incorrectos | Ajusta `_abrir_dialogo_set3dview()` |
-| Display de cargas no aparece | Menú Display diferente | Ajusta `_mostrar_cargas_menu()` |
-| Error xlwings | xlwings no instalado | `pip install xlwings` y `xlwings addin install` |
-| Error `GetModule` | DLL de SAP2000 no encontrado | Verifica la ruta en hoja CONFIG |
-| Imagen en negro | Ventana SAP2000 minimizada | Mantén SAP2000 visible |
-| Imagen recortada mal | % de crop invertidos | Recuerda: Izq% y Sup% = posición inicial; Der% e Inf% = posición final |
+| Problema | Causa probable | Acción |
+| --- | --- | --- |
+| SAP2000 no detectado | SAP2000 no está abierto o visible | Abre el modelo y deja la ventana visible |
+| No se genera el `.xlsx` | No hay EXE ni Python disponible | Compila el EXE o instala Python |
+| Error de dependencias | Faltan paquetes de Python | Instala los paquetes indicados arriba |
+| Fila ignorada | Configuración inválida en `CAPTURAS` | Revisa vista, display, patrón y recortes |
+| No escribe fuera de la carpeta del Excel | Modo seguro activo | Usa `--allow-unsafe-output` si realmente lo necesitas |
 
-### Verificar la ruta del DLL de SAP2000
+## Alcance actual
 
-En la hoja **CONFIG**, celda B2, verifica que la ruta sea correcta para tu instalación:
-```
-C:\Program Files\Computers and Structures\SAP2000 23\SAP2000v1.dll
-```
-
----
-
-## Personalización avanzada
-
-### Cambiar el tiempo de espera entre vistas
-
-En `sap_imagenes.py`, líneas cerca del inicio:
-
-```python
-PAUSA_TRAS_VISTA   = 1.2   # ← Aumentar si SAP2000 es lento en tu equipo
-PAUSA_TRAS_DISPLAY = 1.5
-```
-
-### Agregar nuevos ángulos predefinidos
-
-En `VISTA_ANGULOS` al inicio del script:
-
-```python
-VISTA_ANGULOS = {
-    ...
-    "ISO_TECHO": (180, 80),     # Vista casi cenital desde el norte
-    "PERSPECTIVA": (200, 15),   # Perspectiva baja dramática
-}
-```
-
-Y agregar la clave a `VISTAS_VALIDAS` con su descripción.
+- Archivo de configuración: `xlsx`
+- Ejecución soportada: `Python CLI`, `EXE portable`, `ejecutar_capturas.bat`
+- Referencias obsoletas eliminadas: macros VBA, flujo `xlsm`, dependencia de `xlwings` para el uso normal
