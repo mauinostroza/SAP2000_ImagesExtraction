@@ -1518,8 +1518,24 @@ def main_cli(argv=None) -> int:
             log.error(str(e))
             return 2
 
-    # Sin argumentos: solo crear el Excel en la carpeta actual
-    ruta = os.path.join(os.getcwd(), "SAP2000_Capturas.xlsx")
+    # Sin argumentos: si existe la plantilla en la carpeta del ejecutable o actual,
+    # asumir que el usuario quiere ejecutar capturas con doble clic.
+    rutas_candidatas = []
+    if getattr(sys, "frozen", False):
+        rutas_candidatas.append(os.path.join(os.path.dirname(sys.executable), "SAP2000_Capturas.xlsx"))
+    rutas_candidatas.append(os.path.join(os.getcwd(), "SAP2000_Capturas.xlsx"))
+
+    for ruta_config in rutas_candidatas:
+        if os.path.exists(ruta_config):
+            print(f"Usando configuración detectada: {ruta_config}")
+            return main_cli(["--config", ruta_config])
+
+    # Sin argumentos ni plantilla: crear el Excel en la carpeta del ejecutable
+    # si estamos dentro del EXE, o en la carpeta actual si corremos con Python.
+    if getattr(sys, "frozen", False):
+        ruta = os.path.join(os.path.dirname(sys.executable), "SAP2000_Capturas.xlsx")
+    else:
+        ruta = os.path.join(os.getcwd(), "SAP2000_Capturas.xlsx")
     crear_excel_configuracion(ruta)
     print(f"Plantilla Excel creada en: {ruta}")
     print("Úsala con: python sap_imagenes.py --config SAP2000_Capturas.xlsx")

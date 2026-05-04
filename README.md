@@ -68,6 +68,9 @@ Con EXE portable:
 sap2000_capture.exe --config SAP2000_Capturas.xlsx
 ```
 
+Si haces doble clic sobre `sap2000_capture.exe` y existe `SAP2000_Capturas.xlsx`
+en la misma carpeta del ejecutable, el EXE usará esa configuración automáticamente.
+
 Si trabajas dentro del repo tras compilar:
 
 ```bat
@@ -80,7 +83,7 @@ Launcher `.bat`:
 ejecutar_capturas.bat
 ```
 
-El launcher busca `SAP2000_Capturas.xlsx` en la misma carpeta. Si no existe, intenta crearlo con el EXE y, si no está disponible, con Python.
+El launcher busca `SAP2000_Capturas.xlsx` en la misma carpeta. Si no existe, intenta crearlo con el EXE y, si no está disponible, con Python. El artifact portable del workflow ahora debe incluir también este `.bat`.
 
 ## Estructura del Excel
 

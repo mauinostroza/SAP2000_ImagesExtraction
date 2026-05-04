@@ -46,6 +46,7 @@ jobs:
           if (Test-Path $bundleDir) { Remove-Item $bundleDir -Recurse -Force }
           New-Item -ItemType Directory -Path $bundleDir | Out-Null
           Copy-Item "dist/sap2000_capture/*" -Destination $bundleDir -Recurse
+          Copy-Item "ejecutar_capturas.bat" -Destination $bundleDir
           Copy-Item "README.md" -Destination $bundleDir
           Copy-Item "SAP2000_Capturas.xlsx" -Destination $bundleDir
           Compress-Archive -Path "$bundleDir/*" -DestinationPath "sap2000_capture_portable_windows.zip" -Force
