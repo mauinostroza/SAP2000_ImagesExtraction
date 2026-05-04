@@ -26,13 +26,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build dependencies
-        run: |
-          python -m venv .build-venv
-
       - name: Build portable exe
+        shell: cmd
         run: |
-          build_exe.bat
+          call build_exe.bat
 
       - name: Smoke test exe
         shell: pwsh
