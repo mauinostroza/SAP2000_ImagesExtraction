@@ -1517,6 +1517,10 @@ def main_cli(argv=None) -> int:
         except ValueError as e:
             log.error(str(e))
             return 2
+        except Exception:
+            log.error("Fallo inesperado al ejecutar las capturas.")
+            log.error(traceback.format_exc())
+            return 1
 
     # Sin argumentos: si existe la plantilla en la carpeta del ejecutable o actual,
     # asumir que el usuario quiere ejecutar capturas con doble clic.
@@ -1547,4 +1551,15 @@ def main_cli(argv=None) -> int:
 # =============================================================================
 
 if __name__ == "__main__":
-    sys.exit(main_cli())
+    try:
+        exit_code = main_cli()
+    except Exception:
+        log.error("Fallo inesperado en el arranque de la aplicación.")
+        log.error(traceback.format_exc())
+        if getattr(sys, "frozen", False):
+            try:
+                input("Presiona Enter para cerrar...")
+            except Exception:
+                pass
+        raise SystemExit(1)
+    raise SystemExit(exit_code)

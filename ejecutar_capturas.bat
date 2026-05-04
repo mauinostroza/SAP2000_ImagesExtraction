@@ -25,6 +25,14 @@ if not defined EXE_PATH if exist "%EXE_PATH_DIST%" set EXE_PATH=%EXE_PATH_DIST%
 REM Configuracion principal basada en XLSX
 set EXCEL_CONFIG=%SCRIPT_DIR%SAP2000_Capturas.xlsx
 
+echo Directorio del launcher: %SCRIPT_DIR%
+if defined EXE_PATH (
+    echo EXE detectado: %EXE_PATH%
+) else (
+    echo EXE detectado: ninguno
+)
+echo Excel configuracion: %EXCEL_CONFIG%
+
 if not exist "%EXCEL_CONFIG%" (
     echo No existe el archivo de configuracion: %EXCEL_CONFIG%
     echo Creando plantilla...
@@ -77,7 +85,8 @@ if %errorlevel% equ 0 (
     echo Proceso completado.
 ) else (
     echo.
-    echo Hubo errores. Revisa el log anterior.
+    echo Hubo errores. Codigo devuelto: %errorlevel%.
+    echo Revisa el log anterior.
 )
 
 pause
