@@ -8,7 +8,7 @@ on:
     paths:
       - ".github/workflows/build-portable-exe.yml"
       - "sap_imagenes.py"
-      - "sap2000_portable.py"
+      - "sap2000_gui.py"
       - "sap2000_portable.spec"
       - "requirements-exe.txt"
       - "build_exe.bat"
@@ -28,38 +28,43 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements-exe.txt
 
-      - name: Build portable exe
+      - name: Build portable exe (onefile)
         shell: cmd
         run: |
           call build_exe.bat
 
-      - name: Smoke test exe
+      - name: Smoke test — verificar que el .exe genera el Excel
         shell: pwsh
         env:
           SAP2000_SUPPRESS_POPUPS: "1"
         run: |
-          .\dist\sap2000_capture\sap2000_capture.exe --crear-excel "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
+          .\dist\sap2000_capture.exe --crear-excel "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
           if (!(Test-Path "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx")) {
             throw "No se genero el Excel desde el EXE"
           }
 
-      - name: Prepare artifact bundle
+      - name: Empaquetar artifact (solo .exe + docs + Excel)
         shell: pwsh
         run: |
-          $bundleDir = "artifact_bundle"
-          if (Test-Path $bundleDir) { Remove-Item $bundleDir -Recurse -Force }
-          New-Item -ItemType Directory -Path $bundleDir | Out-Null
-          Copy-Item "dist/sap2000_capture/*" -Destination $bundleDir -Recurse
-          Copy-Item "ejecutar_capturas.bat" -Destination $bundleDir
-          Copy-Item "README.md" -Destination $bundleDir
-          Copy-Item "SAP2000_Capturas.xlsx" -Destination $bundleDir
-          Compress-Archive -Path "$bundleDir/*" -DestinationPath "sap2000_capture_portable_windows.zip" -Force
+          $zipName = "sap2000_capture_windows.zip"
+          $files = @(
+            "dist\sap2000_capture.exe",
+            "README.md"
+          )
+          # Incluir el Excel de config si existe
+          if (Test-Path "SAP2000_Capturas.xlsx") {
+            $files += "SAP2000_Capturas.xlsx"
+          } elseif (Test-Path "SAP2000_Capturas.xlsm") {
+            $files += "SAP2000_Capturas.xlsm"
+          }
+          Compress-Archive -Path $files -DestinationPath $zipName -Force
+          Write-Host "ZIP creado: $zipName"
 
-      - name: Upload portable exe artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sap2000-capture-portable-windows
+          name: sap2000-capture-windows
           path: |
-            sap2000_capture_portable_windows.zip
-            dist/sap2000_capture/**
+            sap2000_capture_windows.zip
+            dist/sap2000_capture.exe
           if-no-files-found: error

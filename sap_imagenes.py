@@ -432,44 +432,87 @@ class SAP2000Conector:
         self.sap_model = None
 
     def conectar(self) -> "SAP2000Conector":
-        """Conecta a SAP2000. Lanza RuntimeError si no está abierto."""
+        """Conecta a SAP2000. Lanza RuntimeError si no está abierto.
+
+        Pasos de diagnóstico diferenciados:
+          1. Validar que el DLL de SAP2000 existe en la ruta configurada.
+          2. Cargar la biblioteca de tipos COM desde el DLL.
+          3. Crear el objeto Helper y obtener SapObject.
+          4. Verificar que hay un modelo abierto.
+
+        Cada paso genera un mensaje de error específico para facilitar
+        la resolución de problemas.
+        """
         log.info("Conectando a SAP2000...")
         _ensure_comtypes()
 
-        # Generar wrappers comtypes la primera vez (idempotente luego)
-        sap_gen = None
-        if os.path.exists(self.dll_path):
-            try:
-                sap_gen = comtypes.client.GetModule(self.dll_path)
-            except Exception:
-                pass  # Los wrappers ya existen — ignorar
+        # --- Paso 1: Validar que el DLL existe ---
+        if not os.path.exists(self.dll_path):
+            raise SAP2000ConnectionError(
+                f"ARCHIVO DLL NO ENCONTRADO.\n"
+                f"La ruta configurada no existe:\n"
+                f"  {self.dll_path}\n\n"
+                f"Posibles causas:\n"
+                f"- La ruta del DLL en la hoja CONFIG (celda B2) del Excel es incorrecta.\n"
+                f"- SAP2000 no está instalado en esta máquina.\n"
+                f"- La versión de SAP2000 no es la esperada.\n\n"
+                f"Solución: Verifica la ruta en tu Excel de configuración o ajusta el "
+                f"valor por defecto en el script."
+            )
 
+        # --- Paso 2: Cargar la biblioteca de tipos COM ---
+        try:
+            sap_gen = comtypes.client.GetModule(self.dll_path)
+        except Exception as e:
+            raise SAP2000ConnectionError(
+                f"ERROR AL CARGAR LA BIBLIOTECA DE TIPO/DLL.\n"
+                f"No se pudo cargar la biblioteca de tipos COM desde:\n"
+                f"  {self.dll_path}\n\n"
+                f"Detalle técnico: {e}\n\n"
+                f"Posibles causas:\n"
+                f"- El archivo DLL existe pero está dañado o no es una biblioteca "
+                f"de tipos COM válida.\n"
+                f"- La versión de SAP2000 es distinta a la que se espera.\n"
+                f"- Permisos insuficientes para leer el DLL.\n\n"
+                f"Solución: Verifica la instalación de SAP2000 y la ruta del DLL."
+            ) from e
+
+        # --- Paso 3: Obtener el objeto Helper ---
         try:
             helper = comtypes.client.CreateObject("SAP2000v1.Helper")
         except Exception as e:
             raise SAP2000ConnectionError(
-                f"No se pudo crear SAP2000v1.Helper.\n"
-                f"Verifica que SAP2000 v23 esté instalado y que\n"
-                f"el DLL exista en:\n  {self.dll_path}\n\nDetalle: {e}"
+                f"ERROR DE PROGID COM.\n"
+                f"No se pudo crear el objeto COM 'SAP2000v1.Helper'.\n\n"
+                f"Detalle: {e}\n\n"
+                f"Posibles causas:\n"
+                f"- SAP2000 no está instalado correctamente (faltan registros COM).\n"
+                f"- La instalación de SAP2000 está dañada.\n"
+                f"- Se necesita reinstalar SAP2000 o reparar la instalación.\n\n"
+                f"Solución: Reinstala o repara SAP2000 desde 'Agregar o quitar programas'."
             ) from e
 
+        # --- Paso 4: QueryInterface y GetObject ---
         try:
-            if sap_gen is None and os.path.exists(self.dll_path):
-                sap_gen = comtypes.client.GetModule(self.dll_path)
             if sap_gen is not None:
                 helper = helper.QueryInterface(sap_gen.cHelper)
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
             raise SAP2000ConnectionError(
-                f"SAP2000 no está abierto o no responde.\n"
-                f"Abre SAP2000 con un modelo cargado antes de ejecutar este script.\n\n"
-                f"Detalle: {e}"
+                f"SAP2000 NO ESTÁ ABIERTO O NO RESPONDE.\n"
+                f"El objeto COM Helper se creó, pero no se pudo obtener SapObject.\n\n"
+                f"Detalle: {e}\n\n"
+                f"Posibles causas:\n"
+                f"- SAP2000 no está en ejecución. Abre SAP2000 con un modelo cargado.\n"
+                f"- SAP2000 está iniciando pero aún no responde (espera unos segundos).\n"
+                f"- La ventana de SAP2000 está minimizada en la bandeja del sistema.\n\n"
+                f"Solución: Abre SAP2000 manualmente con un modelo cargado y vuelve a intentar."
             ) from e
 
         self.sap_model = self.sap_obj.SapModel
         log.info("Conexión a SAP2000 establecida ✓")
 
-        # Verificar que hay un modelo abierto
+        # --- Paso 5: Verificar que hay un modelo abierto ---
         try:
             model_filename = self.sap_model.GetModelFilename()
             if isinstance(model_filename, (list, tuple)):

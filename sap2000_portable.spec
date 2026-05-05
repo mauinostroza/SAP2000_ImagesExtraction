@@ -1,10 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+#
+# Genera un SOLO ejecutable: dist/sap2000_capture.exe
+# Sin carpeta ni archivos extra — el .exe se auto-extrae al ejecutarse.
+# Punto de entrada directo: sap2000_gui.py
 
 hiddenimports = [
     "comtypes",
     "comtypes.client",
     "comtypes.gen",
-    "sap2000_gui",
+    "openpyxl",
     "tkinter",
     "tkinter.ttk",
     "tkinter.filedialog",
@@ -16,28 +20,21 @@ hiddenimports = [
     "win32con",
     "win32ui",
     "win32api",
-    "win32timezone",
     "PIL.Image",
+    "PIL.ImageGrab",
     "mouseinfo",
     "pygetwindow",
     "pyscreeze",
     "pytweening",
     "pyrect",
     "pymsgbox",
+    "sap_imagenes",
 ]
 
 block_cipher = None
 
-
-def _pick_script(scripts, script_name):
-    for entry in scripts:
-        if entry[0] == script_name:
-            return [entry]
-    raise ValueError(f"No se encontro el script {script_name!r} en Analysis.scripts")
-
-
 a = Analysis(
-    ["sap2000_portable.py", "sap2000_gui.py"],
+    ["sap2000_gui.py"],
     pathex=[],
     binaries=[],
     datas=[],
@@ -45,36 +42,23 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["xlwings", "matplotlib", "numpy", "pandas"],
+    excludes=["matplotlib", "numpy", "pandas", "xlwings"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-cli_exe = EXE(
+
+exe = EXE(
     pyz,
-    _pick_script(a.scripts, "sap2000_portable"),
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="sap2000_capture",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-gui_exe = EXE(
-    pyz,
-    _pick_script(a.scripts, "sap2000_gui"),
-    [],
-    exclude_binaries=True,
-    name="sap2000_capture_gui",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -85,15 +69,4 @@ gui_exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-coll = COLLECT(
-    cli_exe,
-    gui_exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="sap2000_capture",
 )

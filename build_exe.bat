@@ -17,22 +17,26 @@ if not exist "%VENV_DIR%\Scripts\python.exe" (
     if %errorlevel% neq 0 exit /b 1
 )
 
-echo Instalando dependencias de build en venv local...
-"%VENV_DIR%\Scripts\python.exe" -m pip install --upgrade pip
-if %errorlevel% neq 0 exit /b 1
-
+echo Instalando dependencias...
+"%VENV_DIR%\Scripts\python.exe" -m pip install --upgrade pip >nul
 "%VENV_DIR%\Scripts\python.exe" -m pip install -r requirements-exe.txt
 if %errorlevel% neq 0 exit /b 1
 
-echo Limpiando artefactos previos...
+echo Limpiando builds previos...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo Generando ejecutable portable...
+echo Generando ejecutable unico (onefile, GUI)...
 "%VENV_DIR%\Scripts\python.exe" -m PyInstaller --clean sap2000_portable.spec
 if %errorlevel% neq 0 exit /b 1
 
 echo.
-echo Build completado.
-echo Salida: %SCRIPT_DIR%dist\sap2000_capture\
+echo ============================================
+echo BUILD COMPLETADO
+echo ============================================
+echo Salida: %SCRIPT_DIR%dist\sap2000_capture.exe
+echo.
+echo El .exe es auto-contenido. Solo necesitas
+echo distribuirlo junto al Excel de configuracion.
+echo ============================================
 exit /b 0

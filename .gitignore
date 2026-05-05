@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.build-venv/
 build/
 dist/
-artifact_bundle/
+*.spec.orig

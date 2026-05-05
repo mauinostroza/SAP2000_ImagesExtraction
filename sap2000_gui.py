@@ -100,7 +100,16 @@ class SAP2000GuiApp:
         )
 
     def _has_connection(self) -> bool:
-        return self.conector is not None and getattr(self.conector, "sap_model", None) is not None
+        if self.conector is None or getattr(self.conector, "sap_model", None) is None:
+            return False
+
+        # Verificar que la referencia COM sigue viva (SAP2000 no se cerró)
+        try:
+            _ = self.conector.sap_model.GetModelFilename()
+            return True
+        except Exception:
+            self.conector = None  # Invalidar conexión colgada
+            return False
 
     def _default_config_path(self) -> str:
         base_dir = Path(__file__).resolve().parent
@@ -369,11 +378,16 @@ class SAP2000GuiApp:
         activas = [c for c in capturas if c.get("activo", False)]
         backend.log.info(f"Capturas configuradas: {len(capturas)} | Activas: {len(activas)}")
 
-        resultado = backend.ejecutar_trabajo_capturas(
-            config,
-            sap_model=self.conector.sap_model,
-            conectar_si_falta=False,
-        )
+        try:
+            resultado = backend.ejecutar_trabajo_capturas(
+                config,
+                sap_model=self.conector.sap_model,
+                conectar_si_falta=False,
+            )
+        except Exception as exc:
+            # Error de COM/captura — invalidar conexión por si SAP2000 se cerró
+            self.conector = None
+            raise
 
         if resultado["stage"] != "captura":
             self.conector = None
@@ -453,13 +467,32 @@ class SAP2000GuiApp:
 
         self._detach_log_handler()
 
+        # Esperar al worker thread primero (si se está ejecutando)
+        if self.worker_thread is not None and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=2.0)
+
+        # Luego liberar la conexión COM
+        self.conector = None
+
         try:
             self.root.destroy()
         except tk.TclError:
             pass
 
 
-def main(config_path: Optional[str] = None, allow_unsafe_output: bool = False) -> None:
+def main(
+    config_path: Optional[str] = None,
+    allow_unsafe_output: bool = False,
+    crear_excel: Optional[str] = None,
+) -> None:
+    if crear_excel:
+        try:
+            backend.crear_excel_configuracion(crear_excel)
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo crear la plantilla Excel en:\n{crear_excel}\n\n{exc}") from exc
+        print(f"Plantilla Excel creada en: {crear_excel}")
+        return
+
     try:
         root = tk.Tk()
     except tk.TclError as exc:
@@ -484,6 +517,11 @@ def parse_args(argv=None):
         help="Ruta al Excel de configuración que abrirá la GUI.",
     )
     parser.add_argument(
+        "--crear-excel",
+        metavar="RUTA",
+        help="Crear plantilla Excel de configuración en la ruta indicada y salir.",
+    )
+    parser.add_argument(
         "--allow-unsafe-output",
         action="store_true",
         help=(
@@ -505,6 +543,7 @@ if __name__ == "__main__":
         main(
             config_path=args.config,
             allow_unsafe_output=args.allow_unsafe_output,
+            crear_excel=args.crear_excel,
         )
     except Exception as exc:
         _mostrar_error_fatal_gui(
