@@ -10,6 +10,7 @@ El flujo vigente usa el mecanismo **Capture Picture BMP** de SAP2000 como base d
 README.md
 ejecutar_capturas.bat
 sap_imagenes.py
+sap2000_gui.py
 crear_excel.py
 build_exe.bat
 sap2000_portable.py
@@ -83,7 +84,51 @@ Launcher `.bat`:
 ejecutar_capturas.bat
 ```
 
-El launcher busca `SAP2000_Capturas.xlsx` en la misma carpeta. Si no existe, intenta crearlo con el EXE y, si no está disponible, con Python. El artifact portable del workflow ahora debe incluir también este `.bat`.
+El launcher busca `SAP2000_Capturas.xlsx` en la misma carpeta. Si no existe, intenta crearlo con el EXE y, si no está disponible, con Python. Si lo ejecutas sin argumentos, lanza la captura por CLI usando esa configuración y mantiene activo el modo seguro de salida.
+
+Interfaz gráfica simple:
+
+```bat
+sap2000_capture.exe --gui --config SAP2000_Capturas.xlsx
+```
+
+Si compilaste el paquete portable con el `spec` actual, también queda disponible un EXE GUI dedicado:
+
+```bat
+sap2000_capture_gui.exe --config SAP2000_Capturas.xlsx
+```
+
+La GUI separa el proceso en dos botones:
+- `Conectar a SAP2000`: valida la conexión.
+- `Extraer fotos`: lee el Excel y genera las capturas.
+
+También puedes abrirla con Python:
+
+```bat
+python sap2000_gui.py --config SAP2000_Capturas.xlsx
+```
+
+Y desde el launcher:
+
+```bat
+ejecutar_capturas.bat --gui
+```
+
+Si realmente necesitas permitir una carpeta de salida absoluta o fuera de la carpeta base del Excel, debes pedirlo de forma explícita:
+
+```bat
+ejecutar_capturas.bat --allow-unsafe-output
+ejecutar_capturas.bat --gui --allow-unsafe-output
+```
+
+Comportamiento de argumentos:
+
+- `sap2000_capture.exe` acepta `--gui`, `--config` y `--allow-unsafe-output`.
+- `sap2000_capture_gui.exe` acepta `--config` y `--allow-unsafe-output`.
+- `python sap2000_gui.py` acepta `--config` y `--allow-unsafe-output`.
+- `ejecutar_capturas.bat` usa el mismo Excel detectado por el launcher y no pasa `--allow-unsafe-output` salvo que el usuario lo indique.
+- `ejecutar_capturas.bat` ignora cualquier `--config` recibido y siempre usa `SAP2000_Capturas.xlsx` en la carpeta del launcher.
+- `ejecutar_capturas.bat --gui` abre la GUI con ese mismo Excel y conserva el mismo criterio para `--allow-unsafe-output`.
 
 ## Estructura del Excel
 
@@ -155,7 +200,15 @@ Salida:
 dist\sap2000_capture\
 ```
 
-El EXE usa la misma CLI que `sap_imagenes.py`.
+Archivos principales del paquete:
+
+```text
+dist\sap2000_capture\sap2000_capture.exe
+dist\sap2000_capture\sap2000_capture_gui.exe
+```
+
+- `sap2000_capture.exe`: entrypoint CLI. Si recibe `--gui`, delega a la interfaz gráfica.
+- `sap2000_capture_gui.exe`: entrypoint GUI real, sin consola.
 
 ## Solución de problemas
 
@@ -170,5 +223,5 @@ El EXE usa la misma CLI que `sap_imagenes.py`.
 ## Alcance actual
 
 - Archivo de configuración: `xlsx`
-- Ejecución soportada: `Python CLI`, `EXE portable`, `ejecutar_capturas.bat`
+- Ejecución soportada: `Python CLI`, `GUI Tkinter`, `EXE portable`, `ejecutar_capturas.bat`
 - Referencias obsoletas eliminadas: macros VBA, flujo `xlsm`, dependencia de `xlwings` para el uso normal

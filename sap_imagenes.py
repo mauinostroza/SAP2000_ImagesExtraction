@@ -27,6 +27,7 @@ import sys
 import time
 import logging
 import traceback
+import threading
 import tempfile
 from pathlib import Path
 
@@ -37,6 +38,16 @@ try:
     import openpyxl
 except ImportError:
     raise ImportError("Instala openpyxl:  pip install openpyxl")
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, scrolledtext, ttk
+except ImportError:
+    tk = None
+    filedialog = None
+    messagebox = None
+    scrolledtext = None
+    ttk = None
 
 comtypes = None
 win32gui = None
@@ -170,6 +181,10 @@ log = logging.getLogger("sap_imagenes")
 SAFE_OUTPUT_ENVVAR = "SAP2000_ALLOW_UNSAFE_OUTPUT"
 
 
+class SAP2000ConnectionError(RuntimeError):
+    """Error explícito al conectar con SAP2000."""
+
+
 def permitir_salida_insegura(explicito: bool = False) -> bool:
     """Permite rutas de salida fuera de la carpeta base solo con opt-in claro."""
     if explicito:
@@ -259,6 +274,53 @@ def cargar_fila_captura(fila: int, valores) -> dict:
     return cfg
 
 
+def _leer_configuracion_desde_sheets(
+    sh_cfg,
+    sh_cap,
+    carpeta_base: str,
+    allow_unsafe_output: bool = False,
+    proyecto_default: str = "Modelo",
+) -> dict:
+    """Lee la configuración común desde hojas CONFIG y CAPTURAS."""
+    try:
+        sap_dll = sh_cfg["B2"].value or SAP_DLL_PATH
+        nombre_proy = sh_cfg["B3"].value or proyecto_default
+        carpeta_rel = sh_cfg["B4"].value or "Capturas_SAP"
+    except Exception:
+        sap_dll = SAP_DLL_PATH
+        nombre_proy = proyecto_default
+        carpeta_rel = "Capturas_SAP"
+
+    carpeta_salida = resolver_carpeta_salida(
+        carpeta_base,
+        carpeta_rel,
+        allow_unsafe=allow_unsafe_output,
+    )
+
+    capturas = []
+    try:
+        fila = 3
+        while True:
+            valores = [sh_cap[f"{col}{fila}"].value for col in "ABCDEFGHIJKL"]
+            if all(valor in (None, "") for valor in valores):
+                break
+            try:
+                capturas.append(cargar_fila_captura(fila, valores))
+            except Exception as e:
+                log.warning(f"Fila {fila} ignorada por configuración inválida: {e}")
+            fila += 1
+    except Exception as e:
+        log.warning(f"Error leyendo hoja CAPTURAS: {e}")
+
+    return {
+        "sap_dll_path": sap_dll,
+        "nombre_proyecto": nombre_proy,
+        "carpeta_salida": carpeta_salida,
+        "capturas": capturas,
+        "ruta_base": carpeta_base,
+    }
+
+
 def resolver_carpeta_salida(
     base_dir: str,
     carpeta_configurada: str,
@@ -286,6 +348,45 @@ def resolver_carpeta_salida(
         )
 
     return _resolver_hijo_seguro(base_dir, carpeta_configurada)
+
+
+def cargar_configuracion_desde_excel(
+    ruta_excel: str,
+    allow_unsafe_output: bool = False,
+    proyecto_default: str = "Modelo",
+) -> dict:
+    """
+    Carga la configuración completa desde una ruta de Excel.
+
+    Esta es la entrada más conveniente para una GUI que trabaja con archivos
+    .xlsx en disco.
+    """
+    ruta_excel = os.path.abspath(ruta_excel)
+    try:
+        libro = openpyxl.load_workbook(ruta_excel, data_only=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"No se pudo abrir el Excel de configuración: {ruta_excel}\n"
+            f"Detalle: {exc}"
+        ) from exc
+
+    try:
+        try:
+            sh_cfg = libro["CONFIG"]
+            sh_cap = libro["CAPTURAS"]
+        except Exception as exc:
+            raise ValueError(
+                "El Excel debe contener las hojas CONFIG y CAPTURAS."
+            ) from exc
+        return _leer_configuracion_desde_sheets(
+            sh_cfg=sh_cfg,
+            sh_cap=sh_cap,
+            carpeta_base=os.path.dirname(ruta_excel),
+            allow_unsafe_output=allow_unsafe_output,
+            proyecto_default=proyecto_default,
+        )
+    finally:
+        libro.close()
 
 
 # =============================================================================
@@ -316,11 +417,11 @@ class SAP2000Conector:
         try:
             helper = comtypes.client.CreateObject("SAP2000v1.Helper")
         except Exception as e:
-            raise RuntimeError(
+            raise SAP2000ConnectionError(
                 f"No se pudo crear SAP2000v1.Helper.\n"
                 f"Verifica que SAP2000 v23 esté instalado y que\n"
                 f"el DLL exista en:\n  {self.dll_path}\n\nDetalle: {e}"
-            )
+            ) from e
 
         try:
             if sap_gen is None and os.path.exists(self.dll_path):
@@ -329,11 +430,11 @@ class SAP2000Conector:
                 helper = helper.QueryInterface(sap_gen.cHelper)
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
-            raise RuntimeError(
+            raise SAP2000ConnectionError(
                 f"SAP2000 no está abierto o no responde.\n"
                 f"Abre SAP2000 con un modelo cargado antes de ejecutar este script.\n\n"
                 f"Detalle: {e}"
-            )
+            ) from e
 
         self.sap_model = self.sap_obj.SapModel
         log.info("Conexión a SAP2000 establecida ✓")
@@ -990,10 +1091,18 @@ class GeneradorImagenes:
             activo          bool
 
         Retorna:
-            dict con 'ok' (bool), 'archivo' (str), 'mensaje' (str)
+            dict con 'estado' (ok|error|inactiva), 'ok' (bool|None),
+            'archivo' (str) y 'mensaje' (str)
         """
         if not config.get("activo", True):
-            return {"ok": False, "archivo": "", "mensaje": "INACTIVO"}
+            return {
+                "ok": None,
+                "estado": "inactiva",
+                "archivo": "",
+                "mensaje": "INACTIVO",
+                "error_tipo": "",
+                "contabiliza_error": False,
+            }
 
         tipo_vista   = validar_tipo_vista(config.get("tipo_vista", "ISO_NE"))
         azimut       = float(config.get("azimut",    225))
@@ -1037,14 +1146,35 @@ class GeneradorImagenes:
             ok = self.ventana.capturar(ruta_archivo, rect_parcial)
 
             if ok:
-                return {"ok": True, "archivo": nombre_archivo, "mensaje": "OK"}
+                return {
+                    "ok": True,
+                    "estado": "ok",
+                    "archivo": nombre_archivo,
+                    "mensaje": "OK",
+                    "error_tipo": "",
+                    "contabiliza_error": False,
+                }
             else:
-                return {"ok": False, "archivo": "", "mensaje": "Error en captura"}
+                return {
+                    "ok": False,
+                    "estado": "error",
+                    "archivo": "",
+                    "mensaje": "Error en captura",
+                    "error_tipo": "Captura",
+                    "contabiliza_error": True,
+                }
 
         except Exception as e:
             log.error(f"Error procesando '{nombre_img}': {e}")
             log.debug(traceback.format_exc())
-            return {"ok": False, "archivo": "", "mensaje": str(e)[:120]}
+            return {
+                "ok": False,
+                "estado": "error",
+                "archivo": "",
+                "mensaje": str(e)[:120],
+                "error_tipo": type(e).__name__,
+                "contabiliza_error": True,
+            }
 
     def procesar_lista(self, lista_config: list) -> list:
         """Procesa una lista de diccionarios de configuración."""
@@ -1054,8 +1184,122 @@ class GeneradorImagenes:
             log.info(f"Imagen {i}/{total}")
             res = self.procesar_fila(cfg)
             res["nombre_imagen"] = cfg.get("nombre_imagen", "")
+            res["_fila"] = cfg.get("_fila")
+            res["fila"] = cfg.get("_fila")
             resultados.append(res)
         return resultados
+
+
+def ejecutar_trabajo_capturas(
+    config: dict,
+    sap_model=None,
+    conectar_si_falta: bool = True,
+) -> dict:
+    """
+    Ejecuta un trabajo de capturas usando un diccionario de configuración ya cargado.
+
+    Retorna un diccionario estructurado con el estado de conexión, el resumen de
+    extracción y los resultados por fila.
+    """
+    def _resumen_base(capturas_config: list) -> dict:
+        total = len(capturas_config)
+        inactivas = sum(1 for item in capturas_config if not item.get("activo", True))
+        activas = total - inactivas
+        return {
+            "ok": 0,
+            "errores": 0,
+            "activas": activas,
+            "inactivas": inactivas,
+            "total": total,
+        }
+
+    cfg = dict(config or {})
+    capturas = list(cfg.get("capturas", []))
+    resumen_base = _resumen_base(capturas)
+
+    conector = None
+    if sap_model is None:
+        if not conectar_si_falta:
+            return {
+                "ok": False,
+                "stage": "conexion",
+                "mensaje": "No se proporcionó sap_model y la conexión automática está deshabilitada.",
+                "error_tipo": "ConnectionDisabled",
+                "sap_model": None,
+                "conector": None,
+                "resultados": [],
+                "resumen": resumen_base,
+            }
+        conector = SAP2000Conector(cfg.get("sap_dll_path", SAP_DLL_PATH))
+        try:
+            conector.conectar()
+        except SAP2000ConnectionError as exc:
+            return {
+                "ok": False,
+                "stage": "conexion",
+                "mensaje": str(exc),
+                "error_tipo": type(exc).__name__,
+                "sap_model": None,
+                "conector": None,
+                "resultados": [],
+                "resumen": resumen_base,
+            }
+        sap_model = conector.sap_model
+
+    gen = GeneradorImagenes(
+        sap_model=sap_model,
+        carpeta_salida=cfg["carpeta_salida"],
+        nombre_proyecto=cfg.get("nombre_proyecto", "Modelo"),
+    )
+
+    try:
+        gen.inicializar()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "stage": "inicializacion",
+            "mensaje": str(exc),
+            "error_tipo": type(exc).__name__,
+            "sap_model": sap_model,
+            "conector": conector,
+            "resultados": [],
+            "resumen": resumen_base,
+        }
+
+    resultados = gen.procesar_lista(capturas)
+    inactive_count = sum(1 for r in resultados if r.get("estado") == "inactiva")
+    active_count = len(resultados) - inactive_count
+    ok_count = sum(1 for r in resultados if r.get("estado") == "ok")
+    err_count = sum(1 for r in resultados if r.get("contabiliza_error"))
+    completed_with_errors = err_count > 0
+
+    if not resultados:
+        mensaje = "No hay capturas configuradas."
+    elif active_count == 0:
+        mensaje = "No hay capturas activas para procesar."
+    elif completed_with_errors:
+        mensaje = "Se completó con errores parciales."
+    else:
+        mensaje = "OK"
+
+    return {
+        "ok": err_count == 0,
+        "completado": True,
+        "parcial": completed_with_errors,
+        "stage": "captura",
+        "mensaje": mensaje,
+        "sap_model": sap_model,
+        "conector": conector,
+        "resultados": resultados,
+        "resumen": {
+            "ok": ok_count,
+            "errores": err_count,
+            "activas": active_count,
+            "inactivas": inactive_count,
+            "total": len(resultados),
+        },
+        "carpeta_salida": cfg["carpeta_salida"],
+    }
 
 
 # =============================================================================
@@ -1074,50 +1318,13 @@ def leer_config_desde_excel(wb, allow_unsafe_output: bool = False) -> dict:
             "capturas": [dict, ...]
         }
     """
-    # ── Hoja CONFIG ──
-    try:
-        sh_cfg = wb.sheets["CONFIG"]
-        sap_dll      = sh_cfg["B2"].value or SAP_DLL_PATH
-        nombre_proy  = sh_cfg["B3"].value or "Proyecto"
-        carpeta_rel  = sh_cfg["B4"].value or "Capturas_SAP"
-    except Exception:
-        sap_dll     = SAP_DLL_PATH
-        nombre_proy = "Proyecto"
-        carpeta_rel = "Capturas_SAP"
-
-    carpeta_excel = os.path.dirname(wb.fullname)
-    carpeta_salida = resolver_carpeta_salida(
-        carpeta_excel,
-        carpeta_rel,
-        allow_unsafe=allow_unsafe_output,
+    return _leer_configuracion_desde_sheets(
+        sh_cfg=wb.sheets["CONFIG"],
+        sh_cap=wb.sheets["CAPTURAS"],
+        carpeta_base=os.path.dirname(wb.fullname),
+        allow_unsafe_output=allow_unsafe_output,
+        proyecto_default="Proyecto",
     )
-
-    # ── Hoja CAPTURAS ──
-    capturas = []
-    try:
-        sh_cap = wb.sheets["CAPTURAS"]
-
-        # Leer datos desde fila 3 (la 2 es encabezado)
-        fila = 3
-        while True:
-            valores = [sh_cap.range(f"{col}{fila}").value for col in "ABCDEFGHIJKL"]
-            if all(valor in (None, "") for valor in valores):
-                break
-            try:
-                capturas.append(cargar_fila_captura(fila, valores))
-            except Exception as e:
-                log.warning(f"Fila {fila} ignorada por configuración inválida: {e}")
-            fila += 1
-
-    except Exception as e:
-        log.warning(f"Error leyendo hoja CAPTURAS: {e}")
-
-    return {
-        "sap_dll_path":   sap_dll,
-        "nombre_proyecto": nombre_proy,
-        "carpeta_salida":  carpeta_salida,
-        "capturas":        capturas,
-    }
 
 
 def escribir_resultados_en_excel(wb, resultados: list):
@@ -1128,12 +1335,17 @@ def escribir_resultados_en_excel(wb, resultados: list):
             fila = res.get("_fila") or res.get("fila")
             if not fila:
                 continue
-            sh_cap.range(f"M{fila}").value = "✓ OK" if res["ok"] else "✗ ERROR"
-            sh_cap.range(f"N{fila}").value = res.get("archivo", "")
-            if res["ok"]:
+            estado = res.get("estado", "error")
+            if estado == "ok":
+                sh_cap.range(f"M{fila}").value = "✓ OK"
                 sh_cap.range(f"M{fila}").color = (198, 239, 206)  # Verde claro
+            elif estado == "inactiva":
+                sh_cap.range(f"M{fila}").value = "○ INACTIVA"
+                sh_cap.range(f"M{fila}").color = (217, 217, 217)  # Gris claro
             else:
+                sh_cap.range(f"M{fila}").value = "✗ ERROR"
                 sh_cap.range(f"M{fila}").color = (255, 199, 206)  # Rojo claro
+            sh_cap.range(f"N{fila}").value = res.get("archivo", "")
 
     except Exception as e:
         log.warning(f"No se pudo escribir resultados en Excel: {e}")
@@ -1168,8 +1380,8 @@ def main():
     except ValueError as e:
         log.error(str(e))
         return
-    capturas = config["capturas"]
 
+    capturas = config["capturas"]
     if not capturas:
         log.warning("No se encontraron filas en la hoja CAPTURAS.")
         return
@@ -1177,34 +1389,30 @@ def main():
     activas = [c for c in capturas if c.get("activo", False)]
     log.info(f"Capturas configuradas: {len(capturas)}  |  Activas: {len(activas)}")
 
-    # Conectar a SAP2000
-    conector = SAP2000Conector(config["sap_dll_path"])
-    conector.conectar()
-
-    # Crear generador
-    gen = GeneradorImagenes(
-        sap_model      = conector.sap_model,
-        carpeta_salida = config["carpeta_salida"],
-        nombre_proyecto= config["nombre_proyecto"]
+    resultado = ejecutar_trabajo_capturas(
+        config,
+        conectar_si_falta=True,
     )
-    gen.inicializar()
 
-    # Procesar todas las capturas
-    resultados = []
-    for cfg in capturas:
-        res = gen.procesar_fila(cfg)
-        res["_fila"] = cfg["_fila"]
-        resultados.append(res)
+    if resultado["stage"] != "captura":
+        log.error(resultado["mensaje"])
+        return
+
+    resultados = resultado["resultados"]
 
     # Escribir resultados de vuelta en Excel
     escribir_resultados_en_excel(wb, resultados)
 
     # Resumen final
-    ok_count  = sum(1 for r in resultados if r["ok"])
-    err_count = len(resultados) - ok_count
+    resumen = resultado["resumen"]
     log.info("=" * 60)
-    log.info(f"Proceso completado: {ok_count} imágenes guardadas, {err_count} errores")
-    log.info(f"Carpeta: {config['carpeta_salida']}")
+    log.info(
+        "Proceso completado: "
+        f"{resumen['ok']} imágenes guardadas, "
+        f"{resumen['errores']} errores, "
+        f"{resumen['inactivas']} inactivas"
+    )
+    log.info(f"Carpeta: {resultado['carpeta_salida']}")
     log.info("=" * 60)
 
 
@@ -1469,6 +1677,11 @@ def main_cli(argv=None) -> int:
             "Por defecto solo se aceptan subcarpetas seguras."
         ),
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Abrir la interfaz gráfica simple para conectar y extraer capturas por separado.",
+    )
     args = parser.parse_args(argv)
 
     if args.crear_excel:
@@ -1476,44 +1689,36 @@ def main_cli(argv=None) -> int:
         print(f"Excel creado en: {args.crear_excel}")
         return 0
 
+    if args.gui:
+        from sap2000_gui import main as main_gui
+
+        main_gui(
+            config_path=args.config,
+            allow_unsafe_output=args.allow_unsafe_output,
+        )
+        return 0
+
     if args.config:
         try:
-            # Leer configuración desde Excel y ejecutar sin xlwings caller
-            import openpyxl as _opx
-            _wb_raw = _opx.load_workbook(args.config, data_only=True)
-
-            # Construir config manualmente desde openpyxl
-            sh = _wb_raw["CONFIG"]
-            sap_dll       = sh["B2"].value or SAP_DLL_PATH
-            nombre_proy   = sh["B3"].value or args.proyecto
-            carpeta_rel   = sh["B4"].value or "Capturas_SAP"
-            carpeta_salida = resolver_carpeta_salida(
-                os.path.dirname(args.config),
-                carpeta_rel,
-                allow_unsafe=permitir_salida_insegura(args.allow_unsafe_output),
+            config = cargar_configuracion_desde_excel(
+                args.config,
+                allow_unsafe_output=permitir_salida_insegura(args.allow_unsafe_output),
+                proyecto_default=args.proyecto,
             )
+            resultado = ejecutar_trabajo_capturas(config)
+            if resultado["stage"] != "captura":
+                log.error(resultado["mensaje"])
+                return 1
 
-            sh_cap = _wb_raw["CAPTURAS"]
-            capturas = []
-            for fila in range(3, sh_cap.max_row + 1):
-                vals = [sh_cap.cell(fila, c).value for c in range(1, 13)]
-                if all(valor in (None, "") for valor in vals):
-                    break
-                try:
-                    capturas.append(cargar_fila_captura(fila, vals))
-                except Exception as e:
-                    log.warning(f"Fila {fila} ignorada por configuración inválida: {e}")
-
-            conector = SAP2000Conector(sap_dll)
-            conector.conectar()
-            gen = GeneradorImagenes(conector.sap_model, carpeta_salida, nombre_proy)
-            gen.inicializar()
-            resultados = gen.procesar_lista(capturas)
-
-            ok  = sum(1 for r in resultados if r["ok"])
-            err = len(resultados) - ok
-            print(f"\nResultado: {ok} imágenes OK, {err} errores → {carpeta_salida}")
-            return 0 if err == 0 else 1
+            resumen = resultado["resumen"]
+            print(
+                "\nResultado: "
+                f"{resumen['ok']} imágenes OK, "
+                f"{resumen['errores']} errores, "
+                f"{resumen['inactivas']} inactivas "
+                f"→ {resultado['carpeta_salida']}"
+            )
+            return 0 if resumen["errores"] == 0 else 1
         except ValueError as e:
             log.error(str(e))
             return 2
