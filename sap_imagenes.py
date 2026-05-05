@@ -180,6 +180,7 @@ logging.basicConfig(
 log = logging.getLogger("sap_imagenes")
 
 SAFE_OUTPUT_ENVVAR = "SAP2000_ALLOW_UNSAFE_OUTPUT"
+SUPPRESS_POPUPS_ENVVAR = "SAP2000_SUPPRESS_POPUPS"
 
 
 class SAP2000ConnectionError(RuntimeError):
@@ -189,6 +190,13 @@ class SAP2000ConnectionError(RuntimeError):
 def mostrar_mensaje_portable(titulo: str, mensaje: str, icono: str = "info") -> None:
     """Muestra un mensaje visible para el EXE portable cuando no hay consola útil."""
     if not getattr(sys, "frozen", False):
+        return
+
+    # En CI o ejecuciones no interactivas, un MessageBox bloquearía el proceso.
+    if valor_verdadero(os.environ.get(SUPPRESS_POPUPS_ENVVAR, "")) or any(
+        valor_verdadero(os.environ.get(env, ""))
+        for env in ("CI", "GITHUB_ACTIONS")
+    ):
         return
 
     iconos = {

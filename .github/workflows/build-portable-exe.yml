@@ -25,6 +25,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Build portable exe
         shell: cmd
@@ -33,6 +34,8 @@ jobs:
 
       - name: Smoke test exe
         shell: pwsh
+        env:
+          SAP2000_SUPPRESS_POPUPS: "1"
         run: |
           .\dist\sap2000_capture\sap2000_capture.exe --crear-excel "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
           if (!(Test-Path "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx")) {
