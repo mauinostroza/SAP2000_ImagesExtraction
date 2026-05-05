@@ -29,6 +29,7 @@ import logging
 import traceback
 import threading
 import tempfile
+import ctypes
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,27 @@ SAFE_OUTPUT_ENVVAR = "SAP2000_ALLOW_UNSAFE_OUTPUT"
 
 class SAP2000ConnectionError(RuntimeError):
     """Error explícito al conectar con SAP2000."""
+
+
+def mostrar_mensaje_portable(titulo: str, mensaje: str, icono: str = "info") -> None:
+    """Muestra un mensaje visible para el EXE portable cuando no hay consola útil."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    iconos = {
+        "info": 0x40,
+        "warning": 0x30,
+        "error": 0x10,
+    }
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            str(mensaje),
+            str(titulo),
+            iconos.get(icono, 0x40),
+        )
+    except Exception:
+        pass
 
 
 def permitir_salida_insegura(explicito: bool = False) -> bool:
@@ -1687,6 +1709,11 @@ def main_cli(argv=None) -> int:
     if args.crear_excel:
         crear_excel_configuracion(args.crear_excel)
         print(f"Excel creado en: {args.crear_excel}")
+        mostrar_mensaje_portable(
+            "SAP2000 Capture",
+            f"Excel creado en:\n{args.crear_excel}",
+            icono="info",
+        )
         return 0
 
     if args.gui:
@@ -1708,23 +1735,51 @@ def main_cli(argv=None) -> int:
             resultado = ejecutar_trabajo_capturas(config)
             if resultado["stage"] != "captura":
                 log.error(resultado["mensaje"])
+                mostrar_mensaje_portable(
+                    "SAP2000 Capture",
+                    f"No se pudieron ejecutar las capturas.\n\n{resultado['mensaje']}",
+                    icono="error",
+                )
                 return 1
 
             resumen = resultado["resumen"]
-            print(
+            resumen_texto = (
                 "\nResultado: "
                 f"{resumen['ok']} imágenes OK, "
                 f"{resumen['errores']} errores, "
                 f"{resumen['inactivas']} inactivas "
                 f"→ {resultado['carpeta_salida']}"
             )
+            print(resumen_texto)
+            if resumen["errores"] > 0 or resumen["ok"] == 0:
+                mostrar_mensaje_portable(
+                    "SAP2000 Capture",
+                    (
+                        f"Proceso finalizado.\n\n"
+                        f"OK: {resumen['ok']}\n"
+                        f"Errores: {resumen['errores']}\n"
+                        f"Inactivas: {resumen['inactivas']}\n"
+                        f"Carpeta: {resultado['carpeta_salida']}"
+                    ),
+                    icono="warning" if resumen["errores"] > 0 else "info",
+                )
             return 0 if resumen["errores"] == 0 else 1
         except ValueError as e:
             log.error(str(e))
+            mostrar_mensaje_portable(
+                "SAP2000 Capture",
+                str(e),
+                icono="error",
+            )
             return 2
         except Exception:
             log.error("Fallo inesperado al ejecutar las capturas.")
             log.error(traceback.format_exc())
+            mostrar_mensaje_portable(
+                "SAP2000 Capture",
+                "Fallo inesperado al ejecutar las capturas. Revisa el log o usa ejecutar_capturas.bat.",
+                icono="error",
+            )
             return 1
 
     # Sin argumentos: si existe la plantilla en la carpeta del ejecutable o actual,
@@ -1748,6 +1803,11 @@ def main_cli(argv=None) -> int:
     crear_excel_configuracion(ruta)
     print(f"Plantilla Excel creada en: {ruta}")
     print("Úsala con: python sap_imagenes.py --config SAP2000_Capturas.xlsx")
+    mostrar_mensaje_portable(
+        "SAP2000 Capture",
+        f"Plantilla Excel creada en:\n{ruta}",
+        icono="info",
+    )
     return 0
 
 

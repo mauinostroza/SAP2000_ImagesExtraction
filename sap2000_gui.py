@@ -14,6 +14,7 @@ import os
 import queue
 import threading
 import traceback
+import ctypes
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,23 @@ from tkinter.scrolledtext import ScrolledText
 import openpyxl
 
 import sap_imagenes as backend
+
+
+def _mostrar_error_fatal_gui(titulo: str, mensaje: str) -> None:
+    """Muestra errores fatales de arranque aunque el EXE GUI no tenga consola."""
+    try:
+        ctypes.windll.user32.MessageBoxW(0, str(mensaje), str(titulo), 0x10)
+        return
+    except Exception:
+        pass
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(titulo, str(mensaje))
+        root.destroy()
+    except Exception:
+        pass
 
 
 class _QueueLogHandler(logging.Handler):
@@ -489,5 +507,8 @@ if __name__ == "__main__":
             allow_unsafe_output=args.allow_unsafe_output,
         )
     except Exception as exc:
-        print(str(exc))
+        _mostrar_error_fatal_gui(
+            "SAP2000 Capture GUI",
+            f"No se pudo abrir la interfaz.\n\n{exc}",
+        )
         raise SystemExit(1)
