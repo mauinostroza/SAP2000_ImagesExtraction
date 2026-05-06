@@ -1,0 +1,13 @@
+{
+  "acpClient.agents": [
+    {
+      "name": "hermes-agent",
+      "type": "stdio",
+      "command": "ssh",
+      "args": [
+        "root@198.211.103.251",
+        "cd ~/hermes-agent && source .venv/bin/activate && hermes acp"
+      ]
+    }
+  ]
+}

@@ -38,8 +38,12 @@ jobs:
         env:
           SAP2000_SUPPRESS_POPUPS: "1"
         run: |
-          .\dist\sap2000_capture.exe --crear-excel "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
-          if (!(Test-Path "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx")) {
+          $excelPath = "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
+          $proc = Start-Process -FilePath ".\dist\sap2000_capture.exe" -ArgumentList "--crear-excel", $excelPath -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "El EXE termino con codigo de salida $($proc.ExitCode)"
+          }
+          if (!(Test-Path $excelPath)) {
             throw "No se genero el Excel desde el EXE"
           }
 

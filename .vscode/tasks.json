@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Conectar Hermes VPS",
+      "type": "shell",
+      "command": "ssh-add ~/.ssh/id_ed25519 2>/dev/null; ssh root@198.211.103.251 'cd ~/hermes-agent && source .venv/bin/activate && hermes acp'",
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}
