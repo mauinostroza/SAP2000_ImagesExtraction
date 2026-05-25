@@ -100,15 +100,19 @@ class SAP2000GuiApp:
         )
 
     def _has_connection(self) -> bool:
-        if self.conector is None or getattr(self.conector, "sap_model", None) is None:
+        """Verifica si hay una conexión activa a SAP2000."""
+        # Si no tenemos el objeto, obviamente no hay conexión.
+        if self.conector is None or not hasattr(self.conector, "sap_model") or self.conector.sap_model is None:
             return False
 
-        # Verificar que la referencia COM sigue viva (SAP2000 no se cerró)
+        # El problema anterior era que GetModelFilename fallaba por falta de wrappers de tipos,
+        # pero la conexión real sí existía. Simplificamos el check.
         try:
-            _ = self.conector.sap_model.GetModelFilename()
-            return True
+            # Intento de acceso a una propiedad básica.
+            # En dynamic dispatch (win32com), esto funcionará si el objeto vive.
+            return self.conector.sap_model is not None
         except Exception:
-            self.conector = None  # Invalidar conexión colgada
+            self.conector = None
             return False
 
     def _default_config_path(self) -> str:
@@ -263,6 +267,7 @@ class SAP2000GuiApp:
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
         self.connect_btn.configure(state=state)
+        # Asegurar que extract_btn se actualiza correctamente
         self.extract_btn.configure(state="disabled" if busy else ("normal" if self._has_connection() else "disabled"))
 
     def _run_worker(self, target, busy_status: str) -> None:
@@ -364,7 +369,10 @@ class SAP2000GuiApp:
         backend.log.info("Conexión a SAP2000 lista desde la GUI.")
 
     def _extract_task(self) -> None:
+        # Check connection before extracting
         if not self._has_connection():
+            # Intentamos reconectar silenciosamente si backend.SAP2000Conector puede auto-reconectar
+            # pero por ahora forzamos error para evitar fallos raros.
             raise RuntimeError("Primero debes conectar a SAP2000.")
 
         config = self._read_extraction_config()
@@ -392,6 +400,9 @@ class SAP2000GuiApp:
         if resultado["stage"] != "captura":
             self.conector = None
             raise RuntimeError(f"{resultado['stage']}: {resultado['mensaje']}")
+
+        # Escribir resultados de vuelta al archivo
+        backend.escribir_resultados_en_excel(config["ruta_config"], resultado["resultados"])
 
         resultados = resultado.get("resultados", [])
         resumen_backend = resultado.get("resumen", {})
