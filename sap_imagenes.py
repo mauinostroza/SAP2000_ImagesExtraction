@@ -37,8 +37,7 @@ except ImportError:
     raise ImportError("Instala openpyxl: pip install openpyxl")
 
 comtypes = None
-win32gui = None
-win32con = None
+win32com = None
 Image = None
 xw = None
 
@@ -51,8 +50,18 @@ def _ensure_comtypes():
         _comtypes.client = comtypes_client
         comtypes = _comtypes
     except ImportError:
-        raise ImportError("Instala comtypes: pip install comtypes")
+        pass
     return comtypes
+
+def _ensure_win32com():
+    global win32com
+    if win32com is not None: return win32com
+    try:
+        import win32com.client as _win32com
+        win32com = _win32com
+    except ImportError:
+        pass
+    return win32com
 
 def _ensure_pillow():
     global Image
@@ -141,34 +150,40 @@ class SAP2000Conector:
         self.sap_model = None
 
     def conectar(self):
-        _ensure_comtypes()
         log.info("Iniciando conexión con SAP2000...")
 
-        # Intento 1: Vía SAP2000v1.Helper (Recomendado)
-        try:
-            if os.path.exists(self.dll_path):
-                try:
-                    sap_gen = comtypes.client.GetModule(self.dll_path)
-                    helper = comtypes.client.CreateObject("SAP2000v1.Helper").QueryInterface(sap_gen.cHelper)
-                    sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
-                    self.sap_model = sap_obj.SapModel
-                    log.info("Conexión vía Helper exitosa ✓")
-                    return self
-                except Exception as e:
-                    log.warning(f"Fallo conexión vía Helper: {e}")
-            else:
-                log.warning(f"DLL no encontrado en {self.dll_path}. Intentando fallback...")
-        except Exception as e:
-            log.warning(f"Error durante inicialización de Helper: {e}")
+        # Intento 1: comtypes con GetModule (Proporciona tipos fuertes)
+        ct = _ensure_comtypes()
+        if ct and os.path.exists(self.dll_path):
+            try:
+                sap_gen = ct.client.GetModule(self.dll_path)
+                helper = ct.client.CreateObject("SAP2000v1.Helper").QueryInterface(sap_gen.cHelper)
+                self.sap_model = helper.GetObject("CSI.SAP2000.API.SapObject").SapModel
+                log.info("Conexión vía comtypes (con GetModule) exitosa ✓")
+                return self
+            except Exception as e:
+                log.warning(f"Fallo conexión comtypes (GetModule): {e}")
 
-        # Intento 2: Fallback directo a SapObject (si está registrado en el sistema)
-        try:
-            sap_obj = comtypes.client.GetActiveObject("CSI.SAP2000.API.SapObject")
-            self.sap_model = sap_obj.SapModel
-            log.info("Conexión vía GetActiveObject exitosa ✓")
-            return self
-        except Exception as e:
-            log.warning(f"Fallo conexión directa: {e}")
+        # Intento 2: win32com Dispatch (Dynamic Dispatch - Más robusto sin DLL registrada)
+        w32 = _ensure_win32com()
+        if w32:
+            try:
+                sap_obj = w32.GetActiveObject("CSI.SAP2000.API.SapObject")
+                self.sap_model = sap_obj.SapModel
+                log.info("Conexión vía win32com exitosa ✓")
+                return self
+            except Exception as e:
+                log.warning(f"Fallo conexión win32com: {e}")
+
+        # Intento 3: comtypes GetActiveObject simple
+        if ct:
+            try:
+                sap_obj = ct.client.GetActiveObject("CSI.SAP2000.API.SapObject")
+                self.sap_model = sap_obj.SapModel
+                log.info("Conexión vía comtypes (GetActiveObject) exitosa ✓")
+                return self
+            except Exception as e:
+                log.warning(f"Fallo conexión comtypes (GetActiveObject): {e}")
 
         # Si llegamos aquí, no pudimos conectar
         msg = (
@@ -177,7 +192,7 @@ class SAP2000Conector:
             "1. Asegúrate de que SAP2000 esté abierto con un modelo cargado.\n"
             "2. Si aparece 'Error al cargar la biblioteca de tipo/DLL', cierra SAP2000 y ejecuta "
             "como ADMINISTRADOR el archivo 'RegisterSAP2000.exe' que se encuentra en la carpeta de instalación de SAP2000.\n"
-            f"3. Verifica que la ruta del DLL en la hoja CONFIG sea correcta: {self.dll_path}"
+            f"3. Verifica la ruta del DLL: {self.dll_path}"
         )
         raise RuntimeError(msg)
 
@@ -187,9 +202,12 @@ class GestorVistas:
         tipo = tipo.upper()
         angulos = VISTAS_VALIDAS.get(tipo)
         if angulos: az, el = angulos
-        self.sap_model.View.SetView3D(az, el, 0)
-        self.sap_model.View.RefreshView(0, True)
-        time.sleep(PAUSA_TRAS_VISTA)
+        try:
+            self.sap_model.View.SetView3D(az, el, 0)
+            self.sap_model.View.RefreshView(0, True)
+            time.sleep(PAUSA_TRAS_VISTA)
+        except Exception as e:
+            raise RuntimeError(f"Fallo en SetView3D: {e}")
 
 class GestorDisplay:
     def __init__(self, sap_model): self.sap_model = sap_model
@@ -198,29 +216,23 @@ class GestorDisplay:
         except: pass
 
         modo = modo.upper()
-        if modo == DISPLAY_CARGAS:
-            # ShowLoadAssigns(Name, ItemType, ShowValues, ShowArrows, ...)
-            # 2 = Frame, True = ShowValues
-            self.sap_model.Display.ShowLoadAssigns(item, 2, True, False)
-        elif modo == DISPLAY_DEFORMADA:
-            # CaseComboName, ScaleFactor, ShowUnDeformed
-            self.sap_model.Display.ShowDeformedShape(item, 0, True)
-        elif modo == DISPLAY_FUERZAS:
-            # Component 4 = Moment 3-3, 2 = Frame, 0 = Auto Scale, True = Show Values
-            self.sap_model.Display.ShowForces(item, 4, 2, 0, True)
-        elif modo == DISPLAY_DISENO:
-            try:
-                # Intentar Acero
-                self.sap_model.DesignSteel.ShowResults(1, True)
-            except:
-                try:
-                    # Intentar Concreto
-                    self.sap_model.DesignConcrete.ShowResults(1, True)
+        try:
+            if modo == DISPLAY_CARGAS:
+                self.sap_model.Display.ShowLoadAssigns(item, 2, True, False)
+            elif modo == DISPLAY_DEFORMADA:
+                self.sap_model.Display.ShowDeformedShape(item, 0, True)
+            elif modo == DISPLAY_FUERZAS:
+                self.sap_model.Display.ShowForces(item, 4, 2, 0, True)
+            elif modo == DISPLAY_DISENO:
+                try: self.sap_model.DesignSteel.ShowResults(1, True)
                 except:
-                    log.warning("No se pudieron mostrar resultados de diseño (Acero/Concreto).")
-        else:
-            self.sap_model.View.RefreshWindow(0)
-        time.sleep(PAUSA_TRAS_DISPLAY)
+                    try: self.sap_model.DesignConcrete.ShowResults(1, True)
+                    except: log.warning("No se pudieron mostrar resultados de diseño.")
+            else:
+                self.sap_model.View.RefreshWindow(0)
+            time.sleep(PAUSA_TRAS_DISPLAY)
+        except Exception as e:
+            log.warning(f"Error al cambiar modo display {modo}: {e}")
 
 class GeneradorImagenes:
     def __init__(self, sap_model, salida, proy):
@@ -244,15 +256,20 @@ class GeneradorImagenes:
 
             with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as tmp: tmp_path = tmp.name
             try:
-                # OAPI v23: SaveWindowToBMPFile(FileName)
-                # NOTA: En algunas versiones es (WindowNumber, FileName, IncludeFrame)
-                # Si falla con 1 argumento, probaremos con 3.
+                # OAPI v23 signature detection
+                success_bmp = False
                 try:
                     ret = self.sap_model.View.SaveWindowToBMPFile(tmp_path)
-                except:
-                    ret = self.sap_model.View.SaveWindowToBMPFile(0, tmp_path, False)
+                    if ret == 0: success_bmp = True
+                except: pass
 
-                if ret != 0: raise RuntimeError(f"Error OAPI SaveWindowToBMPFile: {ret}")
+                if not success_bmp:
+                    try:
+                        ret = self.sap_model.View.SaveWindowToBMPFile(0, tmp_path, False)
+                        if ret == 0: success_bmp = True
+                    except: pass
+
+                if not success_bmp: raise RuntimeError("Error OAPI SaveWindowToBMPFile")
 
                 img = _ensure_pillow().open(tmp_path)
                 crop = normalizar_crop(c.get("crop"))
@@ -272,6 +289,7 @@ class GeneradorImagenes:
                     except: pass
         except Exception as e:
             log.error(f"Error en fila {c.get('_fila')}: {e}")
+            log.debug(traceback.format_exc())
             return {
                 "ok": False, "estado": "error", "mensaje": str(e)[:120], "error_tipo": type(e).__name__,
                 "contabiliza_error": True, "_fila": c["_fila"], "nombre_imagen": c["nombre_imagen"]
@@ -328,7 +346,6 @@ def ejecutar_trabajo_capturas(config, sap_model=None, conectar_si_falta=True):
     }
 
 def escribir_resultados_en_excel(ruta_excel, resultados):
-    """Escribe resultados de vuelta al archivo Excel usando openpyxl."""
     try:
         wb = openpyxl.load_workbook(ruta_excel)
         sh_cap = wb["CAPTURAS"]
@@ -337,14 +354,12 @@ def escribir_resultados_en_excel(ruta_excel, resultados):
             if not fila: continue
             estado = res.get("estado", "error")
             txt = "✓ OK" if estado == "ok" else ("○ INACTIVA" if estado == "inactiva" else "✗ ERROR")
-            sh_cap.cell(row=fila, column=14, value=txt) # Columna N
-            sh_cap.cell(row=fila, column=15, value=res.get("archivo", "")) # Columna O
+            sh_cap.cell(row=fila, column=14, value=txt)
+            sh_cap.cell(row=fila, column=15, value=res.get("archivo", ""))
         wb.save(ruta_excel)
-        log.info("Resultados escritos en el Excel ✓")
     except Exception as e: log.warning(f"No se pudo escribir resultados en Excel: {e}")
 
 def escribir_resultados_xlwings(wb, resultados):
-    """Escribe resultados usando xlwings (para integración con workbook abierto)."""
     try:
         sh_cap = wb.sheets["CAPTURAS"]
         for res in resultados:
@@ -365,25 +380,12 @@ def crear_excel_configuracion(ruta):
     sh_cfg["A1"], sh_cfg["A2"], sh_cfg["B2"] = "CONFIGURACIÓN SAP2000 IMAGE CAPTURE", "Ruta DLL SAP2000", SAP_DLL_PATH
     sh_cfg["A3"], sh_cfg["B3"] = "Nombre del Proyecto", "MiProyecto"
     sh_cfg["A4"], sh_cfg["B4"] = "Subcarpeta de Salida", "Capturas_SAP"
-
     sh_cfg["A6"] = "SOLUCIÓN DE PROBLEMAS"
     sh_cfg["A7"] = "Si aparece 'Error al cargar la biblioteca de tipo/DLL':"
-    sh_cfg["A8"] = "1. Cierra SAP2000."
-    sh_cfg["A9"] = "2. Busca 'RegisterSAP2000.exe' en la carpeta de instalación de SAP2000."
-    sh_cfg["A10"] = "3. Haz clic derecho y selecciona 'Ejecutar como administrador'."
-    sh_cfg["A11"] = "4. Abre SAP2000 y vuelve a intentar."
-
+    sh_cfg["A8"] = "1. Cierra SAP2000. 2. Ejecuta 'RegisterSAP2000.exe' como administrador."
     sh_cap = wb.create_sheet("CAPTURAS")
     headers = ["ACTIVO", "NOMBRE IMAGEN", "VISTA", "AZIMUT", "ELEVACIÓN", "DISPLAY", "CASO/COMBO", "EXTRUSIÓN", "VENTANA", "IZQ %", "SUP %", "DER %", "INF %", "ESTADO", "ARCHIVO"]
     for i, h in enumerate(headers, 1): sh_cap.cell(row=1, column=i, value=h).font = openpyxl.styles.Font(bold=True)
-    ej = [
-        ("SI", "Vista_General", "ISO_NE", 225, 35, "MODELO", "", "SI", "COMPLETA"),
-        ("SI", "Cargas_Muertas", "ISO_NE", 225, 35, "CARGAS", "DEAD", "NO", "COMPLETA"),
-        ("SI", "Deformada", "ISO_NE", 225, 35, "DEFORMADA", "DEAD", "NO", "COMPLETA"),
-        ("SI", "Momentos", "ELEV_X", 270, 0, "FUERZAS", "COMB1", "NO", "COMPLETA"),
-    ]
-    for r, row in enumerate(ej, 2):
-        for c, v in enumerate(row, 1): sh_cap.cell(row=r, column=c, value=v)
     wb.save(ruta)
     log.info(f"Excel creado: {ruta}")
 
@@ -400,16 +402,10 @@ def main_cli(argv=None):
             c = cargar_configuracion_desde_excel(args.config, args.allow_unsafe_output)
             r = ejecutar_trabajo_capturas(c)
             escribir_resultados_en_excel(args.config, r["resultados"])
-            print(f"Resultado: {r['resumen']['ok']} OK, {r['resumen']['errores']} Error")
             return 0 if r['ok'] else 1
         except Exception as e:
             log.error(f"Error: {e}")
-            mostrar_mensaje_portable("SAP2000 Capture", str(e), "error")
             return 1
-    else:
-        ruta = os.path.join(os.getcwd(), "SAP2000_Capturas.xlsx")
-        if os.path.exists(ruta): return main_cli(["--config", ruta])
-        crear_excel_configuracion(ruta)
-        return 0
+    else: return main_cli(["--config", "SAP2000_Capturas.xlsx"]) if os.path.exists("SAP2000_Capturas.xlsx") else 0
 
 if __name__ == "__main__": sys.exit(main_cli())
