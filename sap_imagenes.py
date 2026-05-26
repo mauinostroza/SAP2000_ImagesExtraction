@@ -38,8 +38,22 @@ except ImportError:
 
 comtypes = None
 win32com = None
+pythoncom = None
 Image = None
 xw = None
+
+def _ensure_com_init():
+    global pythoncom
+    if pythoncom is None:
+        try:
+            import pythoncom as _pythoncom
+            pythoncom = _pythoncom
+        except ImportError:
+            return
+    try:
+        pythoncom.CoInitialize()
+    except:
+        pass
 
 def _ensure_comtypes():
     global comtypes
@@ -150,9 +164,10 @@ class SAP2000Conector:
         self.sap_model = None
 
     def conectar(self):
+        _ensure_com_init()
         log.info("Iniciando conexión con SAP2000...")
 
-        # Intento 1: comtypes con GetModule (Proporciona tipos fuertes)
+        # Intento 1: comtypes con GetModule
         ct = _ensure_comtypes()
         if ct and os.path.exists(self.dll_path):
             try:
@@ -164,7 +179,7 @@ class SAP2000Conector:
             except Exception as e:
                 log.warning(f"Fallo conexión comtypes (GetModule): {e}")
 
-        # Intento 2: win32com Dispatch (Dynamic Dispatch - Más robusto sin DLL registrada)
+        # Intento 2: win32com Dispatch
         w32 = _ensure_win32com()
         if w32:
             try:
@@ -175,7 +190,7 @@ class SAP2000Conector:
             except Exception as e:
                 log.warning(f"Fallo conexión win32com: {e}")
 
-        # Intento 3: comtypes GetActiveObject simple
+        # Intento 3: comtypes GetActiveObject
         if ct:
             try:
                 sap_obj = ct.client.GetActiveObject("CSI.SAP2000.API.SapObject")
@@ -185,16 +200,7 @@ class SAP2000Conector:
             except Exception as e:
                 log.warning(f"Fallo conexión comtypes (GetActiveObject): {e}")
 
-        # Si llegamos aquí, no pudimos conectar
-        msg = (
-            "No se pudo conectar a SAP2000.\n\n"
-            "Sugerencias:\n"
-            "1. Asegúrate de que SAP2000 esté abierto con un modelo cargado.\n"
-            "2. Si aparece 'Error al cargar la biblioteca de tipo/DLL', cierra SAP2000 y ejecuta "
-            "como ADMINISTRADOR el archivo 'RegisterSAP2000.exe' que se encuentra en la carpeta de instalación de SAP2000.\n"
-            f"3. Verifica la ruta del DLL: {self.dll_path}"
-        )
-        raise RuntimeError(msg)
+        raise RuntimeError("No se pudo conectar a SAP2000. Asegúrate de que esté abierto.")
 
 class GestorVistas:
     def __init__(self, sap_model): self.sap_model = sap_model
@@ -256,7 +262,6 @@ class GeneradorImagenes:
 
             with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as tmp: tmp_path = tmp.name
             try:
-                # OAPI v23 signature detection
                 success_bmp = False
                 try:
                     ret = self.sap_model.View.SaveWindowToBMPFile(tmp_path)
@@ -324,6 +329,7 @@ def cargar_configuracion_desde_excel(ruta, allow_unsafe_output=False, proyecto_d
     finally: wb.close()
 
 def ejecutar_trabajo_capturas(config, sap_model=None, conectar_si_falta=True):
+    _ensure_com_init()
     conector = None
     if sap_model is None:
         if not conectar_si_falta: return {"ok": False, "stage": "conexion", "mensaje": "Sin sap_model", "resumen": {"ok": 0, "errores": 0, "inactivas": 0, "total": 0}, "resultados": []}
@@ -359,20 +365,6 @@ def escribir_resultados_en_excel(ruta_excel, resultados):
         wb.save(ruta_excel)
     except Exception as e: log.warning(f"No se pudo escribir resultados en Excel: {e}")
 
-def escribir_resultados_xlwings(wb, resultados):
-    try:
-        sh_cap = wb.sheets["CAPTURAS"]
-        for res in resultados:
-            fila = res.get("_fila")
-            if not fila: continue
-            estado = res.get("estado", "error")
-            txt = "✓ OK" if estado == "ok" else ("○ INACTIVA" if estado == "inactiva" else "✗ ERROR")
-            color = (198, 239, 206) if estado == "ok" else ((217, 217, 217) if estado == "inactiva" else (255, 199, 206))
-            sh_cap.range(f"N{fila}").value = txt
-            sh_cap.range(f"N{fila}").color = color
-            sh_cap.range(f"O{fila}").value = res.get("archivo", "")
-    except Exception as e: log.warning(f"No se pudo escribir resultados vía xlwings: {e}")
-
 def crear_excel_configuracion(ruta):
     wb = openpyxl.Workbook()
     sh_cfg = wb.active
@@ -380,9 +372,6 @@ def crear_excel_configuracion(ruta):
     sh_cfg["A1"], sh_cfg["A2"], sh_cfg["B2"] = "CONFIGURACIÓN SAP2000 IMAGE CAPTURE", "Ruta DLL SAP2000", SAP_DLL_PATH
     sh_cfg["A3"], sh_cfg["B3"] = "Nombre del Proyecto", "MiProyecto"
     sh_cfg["A4"], sh_cfg["B4"] = "Subcarpeta de Salida", "Capturas_SAP"
-    sh_cfg["A6"] = "SOLUCIÓN DE PROBLEMAS"
-    sh_cfg["A7"] = "Si aparece 'Error al cargar la biblioteca de tipo/DLL':"
-    sh_cfg["A8"] = "1. Cierra SAP2000. 2. Ejecuta 'RegisterSAP2000.exe' como administrador."
     sh_cap = wb.create_sheet("CAPTURAS")
     headers = ["ACTIVO", "NOMBRE IMAGEN", "VISTA", "AZIMUT", "ELEVACIÓN", "DISPLAY", "CASO/COMBO", "EXTRUSIÓN", "VENTANA", "IZQ %", "SUP %", "DER %", "INF %", "ESTADO", "ARCHIVO"]
     for i, h in enumerate(headers, 1): sh_cap.cell(row=1, column=i, value=h).font = openpyxl.styles.Font(bold=True)
