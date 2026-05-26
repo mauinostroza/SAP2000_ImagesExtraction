@@ -51,9 +51,11 @@ def _ensure_com_init():
         except ImportError:
             return
     try:
-        pythoncom.CoInitialize()
-    except:
-        pass
+        # Usar APARTMENTTHREADED para mayor compatibilidad con objetos UI COM
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+    except Exception:
+        try: pythoncom.CoInitialize()
+        except: pass
 
 def _ensure_comtypes():
     global comtypes
@@ -167,30 +169,32 @@ class SAP2000Conector:
         _ensure_com_init()
         log.info("Iniciando conexión con SAP2000...")
 
-        # Intento 1: comtypes con GetModule
+        # Intento 1: win32com Dispatch (A menudo más robusto con objetos ya abiertos)
+        w32 = _ensure_win32com()
+        if w32:
+            try:
+                # Intentamos GetActiveObject vía win32com
+                sap_obj = w32.GetActiveObject("CSI.SAP2000.API.SapObject")
+                self.sap_model = sap_obj.SapModel
+                log.info(f"Conexión vía win32com exitosa ✓ (Type: {type(self.sap_model)})")
+                return self
+            except Exception as e:
+                log.warning(f"Fallo conexión win32com GetActiveObject: {e}")
+
+        # Intento 2: comtypes con GetModule (Proporciona tipos fuertes si el DLL existe)
         ct = _ensure_comtypes()
         if ct and os.path.exists(self.dll_path):
             try:
                 sap_gen = ct.client.GetModule(self.dll_path)
                 helper = ct.client.CreateObject("SAP2000v1.Helper").QueryInterface(sap_gen.cHelper)
-                self.sap_model = helper.GetObject("CSI.SAP2000.API.SapObject").SapModel
-                log.info("Conexión vía comtypes (con GetModule) exitosa ✓")
+                sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
+                self.sap_model = sap_obj.SapModel
+                log.info("Conexión vía comtypes (GetModule) exitosa ✓")
                 return self
             except Exception as e:
                 log.warning(f"Fallo conexión comtypes (GetModule): {e}")
 
-        # Intento 2: win32com Dispatch
-        w32 = _ensure_win32com()
-        if w32:
-            try:
-                sap_obj = w32.GetActiveObject("CSI.SAP2000.API.SapObject")
-                self.sap_model = sap_obj.SapModel
-                log.info("Conexión vía win32com exitosa ✓")
-                return self
-            except Exception as e:
-                log.warning(f"Fallo conexión win32com: {e}")
-
-        # Intento 3: comtypes GetActiveObject
+        # Intento 3: comtypes GetActiveObject simple
         if ct:
             try:
                 sap_obj = ct.client.GetActiveObject("CSI.SAP2000.API.SapObject")
@@ -200,7 +204,7 @@ class SAP2000Conector:
             except Exception as e:
                 log.warning(f"Fallo conexión comtypes (GetActiveObject): {e}")
 
-        raise RuntimeError("No se pudo conectar a SAP2000. Asegúrate de que esté abierto.")
+        raise RuntimeError("No se pudo conectar a SAP2000. Asegúrate de que esté abierto con un modelo.")
 
 class GestorVistas:
     def __init__(self, sap_model): self.sap_model = sap_model
@@ -209,7 +213,9 @@ class GestorVistas:
         angulos = VISTAS_VALIDAS.get(tipo)
         if angulos: az, el = angulos
         try:
-            self.sap_model.View.SetView3D(az, el, 0)
+            # En dynamic dispatch, a veces hay que usar Call o similar,
+            # pero win32com maneja esto transparentemente.
+            self.sap_model.View.SetView3D(float(az), float(el), 0.0)
             self.sap_model.View.RefreshView(0, True)
             time.sleep(PAUSA_TRAS_VISTA)
         except Exception as e:
@@ -218,17 +224,17 @@ class GestorVistas:
 class GestorDisplay:
     def __init__(self, sap_model): self.sap_model = sap_model
     def set_modo(self, modo, item="", extrusion=False):
-        try: self.sap_model.View.SetDisplayOptions(0, 11, extrusion) # Extrude
+        try: self.sap_model.View.SetDisplayOptions(0, 11, bool(extrusion))
         except: pass
 
         modo = modo.upper()
         try:
             if modo == DISPLAY_CARGAS:
-                self.sap_model.Display.ShowLoadAssigns(item, 2, True, False)
+                self.sap_model.Display.ShowLoadAssigns(str(item), 2, True, False)
             elif modo == DISPLAY_DEFORMADA:
-                self.sap_model.Display.ShowDeformedShape(item, 0, True)
+                self.sap_model.Display.ShowDeformedShape(str(item), 0.0, True)
             elif modo == DISPLAY_FUERZAS:
-                self.sap_model.Display.ShowForces(item, 4, 2, 0, True)
+                self.sap_model.Display.ShowForces(str(item), 4, 2, 0.0, True)
             elif modo == DISPLAY_DISENO:
                 try: self.sap_model.DesignSteel.ShowResults(1, True)
                 except:
@@ -263,16 +269,17 @@ class GeneradorImagenes:
             with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as tmp: tmp_path = tmp.name
             try:
                 success_bmp = False
-                try:
-                    ret = self.sap_model.View.SaveWindowToBMPFile(tmp_path)
-                    if ret == 0: success_bmp = True
-                except: pass
-
-                if not success_bmp:
+                # Detección de firma robusta
+                for attempt in range(2):
                     try:
-                        ret = self.sap_model.View.SaveWindowToBMPFile(0, tmp_path, False)
-                        if ret == 0: success_bmp = True
-                    except: pass
+                        if attempt == 0:
+                            ret = self.sap_model.View.SaveWindowToBMPFile(tmp_path)
+                        else:
+                            ret = self.sap_model.View.SaveWindowToBMPFile(0, tmp_path, False)
+                        if ret == 0:
+                            success_bmp = True
+                            break
+                    except: continue
 
                 if not success_bmp: raise RuntimeError("Error OAPI SaveWindowToBMPFile")
 
