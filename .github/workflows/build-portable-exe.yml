@@ -29,9 +29,12 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements-exe.txt
 
+      - name: Install dependencies
+        run: pip install -r requirements-exe.txt
+
       - name: Build EXE (CI variant)
         shell: pwsh
-        run: pyinstaller --clean sap2000_ci.spec
+        run: python -m PyInstaller --clean sap2000_ci.spec
 
       - name: Excluir dist de Windows Defender
         shell: pwsh
