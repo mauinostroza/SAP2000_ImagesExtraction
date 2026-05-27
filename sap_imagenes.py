@@ -460,21 +460,15 @@ class SAP2000Conector:
                 f"valor por defecto en el script."
             )
 
-        # --- Paso 2: Cargar la biblioteca de tipos COM ---
+        # --- Paso 2: Inicializar COM sin cargar typelib ---
+        sap_gen = None
+
         try:
-            sap_gen = comtypes.client.GetModule(self.dll_path)
+            import comtypes.client
+            self.log("INFO", "Inicialización COM OK (modo compatible sin typelib)")
         except Exception as e:
             raise SAP2000ConnectionError(
-                f"ERROR AL CARGAR LA BIBLIOTECA DE TIPO/DLL.\n"
-                f"No se pudo cargar la biblioteca de tipos COM desde:\n"
-                f"  {self.dll_path}\n\n"
-                f"Detalle técnico: {e}\n\n"
-                f"Posibles causas:\n"
-                f"- El archivo DLL existe pero está dañado o no es una biblioteca "
-                f"de tipos COM válida.\n"
-                f"- La versión de SAP2000 es distinta a la que se espera.\n"
-                f"- Permisos insuficientes para leer el DLL.\n\n"
-                f"Solución: Verifica la instalación de SAP2000 y la ruta del DLL."
+                f"No fue posible inicializar COM.\n\nDetalle: {e}"
             ) from e
 
         # --- Paso 3: Obtener el objeto Helper ---
@@ -492,10 +486,8 @@ class SAP2000Conector:
                 f"Solución: Reinstala o repara SAP2000 desde 'Agregar o quitar programas'."
             ) from e
 
-        # --- Paso 4: QueryInterface y GetObject ---
+        # --- Paso 4: Obtener instancia SAP2000 activa ---
         try:
-            if sap_gen is not None:
-                helper = helper.QueryInterface(sap_gen.cHelper)
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
             raise SAP2000ConnectionError(
