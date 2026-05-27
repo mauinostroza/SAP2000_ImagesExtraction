@@ -461,14 +461,13 @@ class SAP2000Conector:
             )
 
         # --- Paso 2: Inicializar COM sin cargar typelib ---
-        sap_gen = None
-
         try:
             import comtypes.client
-            self.log("INFO", "Inicialización COM OK (modo compatible sin typelib)")
+            log.info("COM inicializado en modo compatible.")
         except Exception as e:
             raise SAP2000ConnectionError(
-                f"No fue posible inicializar COM.\n\nDetalle: {e}"
+                f"No fue posible inicializar COM.\n\n"
+                f"Detalle: {e}"
             ) from e
 
         # --- Paso 3: Obtener el objeto Helper ---
@@ -486,8 +485,10 @@ class SAP2000Conector:
                 f"Solución: Reinstala o repara SAP2000 desde 'Agregar o quitar programas'."
             ) from e
 
-        # --- Paso 4: Obtener instancia SAP2000 activa ---
+        # --- Paso 4: QueryInterface y GetObject ---
         try:
+            if sap_gen is not None:
+                # QueryInterface deshabilitado por compatibilidad COM SAP2000 v23
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
             raise SAP2000ConnectionError(
