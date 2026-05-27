@@ -487,8 +487,7 @@ class SAP2000Conector:
 
         # --- Paso 4: QueryInterface y GetObject ---
         try:
-            if sap_gen is not None:
-                # QueryInterface deshabilitado por compatibilidad COM SAP2000 v23
+            # QueryInterface deshabilitado por compatibilidad COM SAP2000 v23
             self.sap_obj = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
             raise SAP2000ConnectionError(
