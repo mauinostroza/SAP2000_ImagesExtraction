@@ -20,6 +20,8 @@ hiddenimports = [
     "win32con",
     "win32ui",
     "win32api",
+    "win32process",
+    "PIL.ImageGrab",
     "PIL.Image",
     "PIL.ImageGrab",
     "mouseinfo",

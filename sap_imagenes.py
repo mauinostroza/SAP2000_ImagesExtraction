@@ -74,13 +74,14 @@ def _ensure_comtypes():
 
 
 def _ensure_windows_capture_libs():
-    global win32gui, win32con, Image
-    if all(mod is not None for mod in (win32gui, win32con, Image)):
+    global win32gui, win32con, win32process, Image
+    if all(mod is not None for mod in (win32gui, win32con, win32process, Image)):
         return
 
     try:
         import win32gui as _win32gui
         import win32con as _win32con
+        import win32process as _win32process
     except ImportError as exc:
         raise ImportError("Instala pywin32:  pip install pywin32") from exc
 
@@ -91,6 +92,7 @@ def _ensure_windows_capture_libs():
 
     win32gui = _win32gui
     win32con = _win32con
+    win32process = _win32process
     Image = _Image
 
 
@@ -535,11 +537,19 @@ class VentanaCaptura:
         Devuelve el HWND o lanza RuntimeError si no la encuentra.
         """
         resultados = []
+        own_pid = os.getpid()
 
         def _callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 titulo = win32gui.GetWindowText(hwnd)
                 if "SAP2000" in titulo:
+                    # Excluir ventanas del propio proceso (ej. GUI de esta app)
+                    try:
+                        _, pid = win32gui.GetWindowThreadProcessId(hwnd)
+                        if pid == own_pid:
+                            return
+                    except Exception:
+                        pass
                     resultados.append((hwnd, titulo))
 
         win32gui.EnumWindows(_callback, None)
@@ -657,150 +667,30 @@ class VentanaCaptura:
                     pass
 
     def _capturar_desde_sap_a_bmp(self, bmp_path: str):
-        """Ejecuta File > Capture Picture y guarda el BMP mediante el cuadro Save As."""
-        pyautogui_local = _ensure_pyautogui()
+        """Captura el viewport de SAP2000 usando ImageGrab y guarda el BMP."""
+        _ensure_windows_capture_libs()
 
         self.asegurar_enfoque_estricto()
         self._eliminar_si_existe(bmp_path)
 
-        menu_id = self._buscar_menu_capture_picture()
-        if menu_id is None:
-            raise RuntimeError("No se encontró el comando 'Capture Picture' en el menú File.")
+        # Maximizar para obtener el viewport completo (sin decoraciones de ventana)
+        win32gui.ShowWindow(self.hwnd_principal, win32con.SW_MAXIMIZE)
+        time.sleep(0.4)
 
-        win32gui.PostMessage(self.hwnd_principal, win32con.WM_COMMAND, menu_id, 0)
+        # Obtener área cliente (viewport) del hwnd principal
+        # GetClientRect devuelve coords relativas al cliente: (0, 0, width, height)
+        left, top, right, bottom = win32gui.GetClientRect(self.hwnd_principal)
+        width = right - left
+        height = bottom - top
 
-        dialogo = self._esperar_dialogo_guardado()
-        self._guardar_dialogo_como(dialogo, bmp_path, pyautogui_local)
+        # Convertir esquina superior izquierda a coordenadas de pantalla
+        x_screen, y_screen = win32gui.ClientToScreen(self.hwnd_principal, (left, top))
 
-        if not self._esperar_archivo(bmp_path, timeout=20.0):
-            raise RuntimeError("SAP2000 no generó el BMP dentro del tiempo esperado.")
-
-        log.info(f"  → BMP exportado desde SAP2000: {os.path.basename(bmp_path)}")
-
-    def _buscar_menu_capture_picture(self):
-        """Busca el comando Capture Picture dentro del menú File."""
-        menu_raiz = win32gui.GetMenu(self.hwnd_principal)
-        if not menu_raiz:
-            return None
-
-        try:
-            menu_file = win32gui.GetSubMenu(menu_raiz, 0)
-        except Exception:
-            menu_file = None
-        if not menu_file:
-            return None
-
-        total = win32gui.GetMenuItemCount(menu_file)
-        for idx in range(total):
-            try:
-                texto = win32gui.GetMenuString(menu_file, idx, win32con.MF_BYPOSITION)
-            except Exception:
-                continue
-            normalizado = texto.replace("&", "").strip().lower()
-            if "capture picture" in normalizado:
-                menu_id = win32gui.GetMenuItemID(menu_file, idx)
-                if menu_id != -1:
-                    return menu_id
-        return None
-
-    def _esperar_dialogo_guardado(self, timeout: float = 8.0) -> int:
-        """Espera el cuadro Save As disparado por Capture Picture."""
-        deadline = time.time() + timeout
-        candidato = 0
-
-        while time.time() < deadline:
-            ventanas = []
-
-            def _callback(hwnd, _):
-                if not win32gui.IsWindowVisible(hwnd):
-                    return
-                clase = win32gui.GetClassName(hwnd)
-                if clase != "#32770":
-                    return
-                if self._hwnd_en_raiz(win32gui.GetWindow(hwnd, win32con.GW_OWNER)) != self._hwnd_en_raiz(self.hwnd_principal):
-                    return
-                ventanas.append(hwnd)
-
-            win32gui.EnumWindows(_callback, None)
-            if ventanas:
-                candidato = ventanas[0]
-                break
-            time.sleep(0.2)
-
-        if not candidato:
-            raise RuntimeError("No apareció el cuadro de guardado de SAP2000.")
-
-        return candidato
-
-    def _esperar_archivo(self, ruta: str, timeout: float = 15.0) -> bool:
-        """Espera a que un archivo exista y deje de crecer."""
-        deadline = time.time() + timeout
-        ultimo_tamano = -1
-        estable_desde = 0.0
-
-        while time.time() < deadline:
-            if os.path.exists(ruta):
-                try:
-                    tamano = os.path.getsize(ruta)
-                except OSError:
-                    tamano = -1
-                if tamano > 0 and tamano == ultimo_tamano:
-                    if not estable_desde:
-                        estable_desde = time.time()
-                    elif time.time() - estable_desde >= 0.4:
-                        return True
-                else:
-                    estable_desde = 0.0
-                    ultimo_tamano = tamano
-            time.sleep(0.2)
-        return False
-
-    def _guardar_dialogo_como(self, dialogo: int, ruta: str, pyautogui_local):
-        """Completa el Save As usando controles nativos; si falla, usa teclado."""
-        try:
-            win32gui.SetForegroundWindow(dialogo)
-        except Exception:
-            pass
-        time.sleep(0.2)
-
-        edit = self._buscar_control_dialogo(dialogo, ("Edit",))
-        if edit:
-            try:
-                win32gui.SetWindowText(edit, ruta)
-                win32gui.SendMessage(dialogo, win32con.WM_COMMAND, win32con.IDOK, 0)
-                return
-            except Exception:
-                pass
-
-        pyautogui_local.hotkey("ctrl", "l")
-        time.sleep(0.1)
-        pyautogui_local.hotkey("ctrl", "a")
-        pyautogui_local.write(ruta, interval=0.01)
-        time.sleep(0.1)
-        pyautogui_local.press("enter")
-
-    def _buscar_control_dialogo(self, hwnd_padre: int, clases_objetivo: tuple[str, ...]) -> int:
-        """Busca recursivamente el primer control cuya clase esté en la lista dada."""
-        encontrado = 0
-
-        def _callback(hwnd, _):
-            nonlocal encontrado
-            if encontrado:
-                return False
-            try:
-                clase = win32gui.GetClassName(hwnd)
-            except Exception:
-                return True
-            if clase in clases_objetivo:
-                encontrado = hwnd
-                return False
-            return True
-
-        try:
-            win32gui.EnumChildWindows(hwnd_padre, _callback, None)
-        except Exception:
-            return 0
-        return encontrado
+        # Usar PIL.ImageGrab para capturar el área de pantalla
+        from PIL import ImageGrab
+        img = ImageGrab.grab(bbox=(x_screen, y_screen, x_screen + width, y_screen + height))
+        img.save(bmp_path, "BMP")
+        log.info(f"  → BMP capturado desde SAP2000 ({width}x{height}px): {os.path.basename(bmp_path)}")
 
     def _postprocesar_exportacion(self, bmp_path: str, filepath: str, rect_parcial: tuple = None) -> bool:
         """Convierte el BMP exportado y aplica recorte si corresponde."""
