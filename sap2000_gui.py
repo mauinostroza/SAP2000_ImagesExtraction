@@ -11,6 +11,21 @@ principal de capturas. Solo añade el pegamento para:
 import argparse
 import logging
 import os
+import sys
+
+# ── Suprimir ventana de consola cuando se ejecuta como EXE portable ──
+# Solo redirigir stdout/stderr; FreeConsole() puede causar crash si no hay consola
+if getattr(sys, "frozen", False):
+    try:
+        class _DevNull:
+            def write(self, _):
+                pass
+            def flush(self):
+                pass
+        sys.stdout = _DevNull()
+        sys.stderr = _DevNull()
+    except Exception:
+        pass
 import queue
 import threading
 import traceback
