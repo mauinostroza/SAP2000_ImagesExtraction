@@ -37,7 +37,7 @@ a = Analysis(
     ["sap2000_gui.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[("sap_imagenes.py", ".")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
