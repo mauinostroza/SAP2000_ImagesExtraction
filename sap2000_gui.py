@@ -14,12 +14,8 @@ import os
 import sys
 
 # ── Suprimir ventana de consola cuando se ejecuta como EXE portable ──
+# Solo redirigir stdout/stderr; FreeConsole() puede causar crash si no hay consola
 if getattr(sys, "frozen", False):
-    try:
-        import ctypes
-        ctypes.windll.kernel32.FreeConsole()
-    except Exception:
-        pass
     try:
         class _DevNull:
             def write(self, _):
