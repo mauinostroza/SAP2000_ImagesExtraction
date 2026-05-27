@@ -10,6 +10,7 @@ on:
       - "sap_imagenes.py"
       - "sap2000_gui.py"
       - "sap2000_portable.spec"
+      - "sap2000_ci.spec"
       - "requirements-exe.txt"
       - "build_exe.bat"
 
@@ -28,10 +29,14 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements-exe.txt
 
-      - name: Build portable exe (onefile)
-        shell: cmd
+      - name: Build EXE (CI variant)
+        shell: pwsh
+        run: pyinstaller --clean sap2000_ci.spec
+
+      - name: Excluir dist de Windows Defender
+        shell: pwsh
         run: |
-          call build_exe.bat
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\dist"
 
       - name: Smoke test — verificar que el .exe genera el Excel
         shell: pwsh
@@ -39,7 +44,7 @@ jobs:
           SAP2000_SUPPRESS_POPUPS: "1"
         run: |
           $excelPath = "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
-          $proc = Start-Process -FilePath ".\dist\sap2000_capture.exe" -ArgumentList "--crear-excel", $excelPath -Wait -PassThru
+          $proc = Start-Process -FilePath ".\dist\sap2000_capture.exe" -ArgumentList "--crear-excel", $excelPath -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             throw "El EXE termino con codigo de salida $($proc.ExitCode)"
           }
