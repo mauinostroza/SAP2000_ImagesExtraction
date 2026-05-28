@@ -63,10 +63,14 @@ def load_plan(path: str | Path) -> list[ViewConfig]:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return _load_json(path)
-    elif suffix in (".xlsx", ".xls"):
+    elif suffix in (".xlsx", ".xlsm"):
         return _load_excel(path)
+    elif suffix == ".xls":
+        raise ValueError(
+            "Formato .xls no soportado por esta implementación; usa .xlsx o .json"
+        )
     else:
-        raise ValueError(f"Formato no soportado: '{suffix}'. Usa .json o .xlsx")
+        raise ValueError(f"Formato no soportado: '{suffix}'. Usa .json, .xlsx o .xlsm")
 
 
 def _load_json(path: Path) -> list[ViewConfig]:

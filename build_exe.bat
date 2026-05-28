@@ -26,17 +26,18 @@ echo Limpiando builds previos...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo Generando ejecutable unico (onefile, GUI)...
-"%VENV_DIR%\Scripts\python.exe" -m PyInstaller --clean sap2000_portable.spec
+echo Generando ejecutable portable (onefile, CLI)...
+"%VENV_DIR%\Scripts\python.exe" -m PyInstaller --clean --noconfirm sap2000_portable.spec
 if %errorlevel% neq 0 exit /b 1
 
 echo.
 echo ============================================
 echo BUILD COMPLETADO
 echo ============================================
-echo Salida: %SCRIPT_DIR%dist\sap2000_capture.exe
+echo Salida: %SCRIPT_DIR%dist\sap_capture.exe
 echo.
 echo El .exe es auto-contenido. Solo necesitas
-echo distribuirlo junto al Excel de configuracion.
+echo distribuirlo junto al plan de capturas y al DLL
+echo de SAP2000 si no se detecta automaticamente.
 echo ============================================
 exit /b 0

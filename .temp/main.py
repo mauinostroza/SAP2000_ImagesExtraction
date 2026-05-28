@@ -107,30 +107,32 @@ def run_capture_pipeline(
 
     # 5. Loop de capturas
     errors = 0
-    for idx, cfg in enumerate(configs, start=1):
-        desc = cfg.description or f"{cfg.view_type.name} / {cfg.display_type.name}"
-        log.info(f"[{idx:03d}/{len(configs):03d}] {cfg.filename}  —  {desc}")
+    try:
+        for idx, cfg in enumerate(configs, start=1):
+            desc = cfg.description or f"{cfg.view_type.name} / {cfg.display_type.name}"
+            log.info(f"[{idx:03d}/{len(configs):03d}] {cfg.filename}  —  {desc}")
 
-        t0 = time.perf_counter()
-        try:
-            # a) Aplicar vista (cambia caso, ángulo, zoom, espera render)
-            view_ctrl.apply(cfg)
+            t0 = time.perf_counter()
+            try:
+                # a) Aplicar vista (cambia caso, ángulo, zoom, espera render)
+                view_ctrl.apply(cfg)
 
-            # b) Capturar ventana SAP2000
-            out_path = writer.get_output_path(cfg, idx)
-            capture.capture(hwnd, out_path)
+                # b) Capturar ventana SAP2000
+                out_path = writer.get_output_path(cfg, idx)
+                capture.capture(hwnd, out_path)
 
-            elapsed = int((time.perf_counter() - t0) * 1000)
-            writer.record_ok(cfg, idx, out_path, elapsed_ms=elapsed)
+                elapsed = int((time.perf_counter() - t0) * 1000)
+                writer.record_ok(cfg, idx, out_path, elapsed_ms=elapsed)
 
-        except Exception as e:
-            writer.record_error(cfg, idx, e)
-            errors += 1
+            except Exception as e:
+                writer.record_error(cfg, idx, e)
+                errors += 1
 
-    # 6. Log y resumen
-    writer.save_log()
-    writer.print_summary()
-    bridge.disconnect()
+        # 6. Log y resumen
+        writer.save_log()
+        writer.print_summary()
+    finally:
+        bridge.disconnect()
 
     return 0 if errors == 0 else 1
 

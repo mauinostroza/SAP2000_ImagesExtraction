@@ -1,50 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Genera un SOLO ejecutable: dist/sap2000_capture.exe
-# Sin carpeta ni archivos extra — el .exe se auto-extrae al ejecutarse.
-# Punto de entrada directo: sap2000_gui.py
+# Build portable del nuevo CLI modular sap_capture.
+# Entrada: main.py
+# Salida: dist/sap_capture.exe
+
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent
+entry_point = project_root / "main.py"
+module_dir = project_root
 
 hiddenimports = [
     "comtypes",
     "comtypes.client",
     "comtypes.gen",
     "openpyxl",
-    "tkinter",
-    "tkinter.ttk",
-    "tkinter.filedialog",
-    "tkinter.messagebox",
-    "tkinter.scrolledtext",
     "pythoncom",
     "pywintypes",
-    "win32gui",
     "win32con",
+    "win32gui",
     "win32ui",
-    "win32api",
-    "win32process",
-    "PIL.ImageGrab",
     "PIL.Image",
-    "PIL.ImageGrab",
-    "mouseinfo",
-    "pygetwindow",
-    "pyscreeze",
-    "pytweening",
-    "pyrect",
-    "pymsgbox",
-    "sap_imagenes",
 ]
 
 block_cipher = None
 
 a = Analysis(
-    ["sap2000_gui.py"],
-    pathex=[],
+    [str(entry_point)],
+    pathex=[str(module_dir)],
     binaries=[],
-    datas=[("sap_imagenes.py", ".")],
+    datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["matplotlib", "numpy", "pandas", "xlwings"],
+    excludes=["matplotlib", "numpy", "pandas", "pyautogui", "tkinter", "xlwings"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -60,12 +50,12 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="sap2000_capture",
+    name="sap_capture",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

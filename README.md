@@ -1,19 +1,21 @@
-# SAP2000 Image Capture
+# sap_capture
 
-Automatiza capturas de SAP2000 a partir de un archivo `SAP2000_Capturas.xlsx`.
+CLI modular para capturar vistas de SAP2000 de forma autónoma usando `PrintWindow` (Win32), sin depender de que la ventana esté al frente ni del flujo GUI+Excel anterior.
 
-El flujo usa el mecanismo **Capture Picture BMP** de SAP2000 como base de exportación y se controla desde el archivo Excel de configuración. No requiere macros, `xlsm` ni `xlwings`.
-
-## Archivos del proyecto
+## Estructura
 
 ```
-sap2000_capture.exe     → Ejecutable único (GUI) — generado con build_exe.bat
-sap2000_gui.py          → Interfaz gráfica Tkinter
-sap_imagenes.py         → Backend de captura
-build_exe.bat           → Compila sap2000_capture.exe (onefile)
-sap2000_portable.spec   → Spec de PyInstaller (onefile)
-requirements-exe.txt    → Dependencias de build (incluye pyinstaller)
-SAP2000_Capturas.xlsx   → Plantilla de configuración
+main.py
+capture_plan.py
+sap_bridge.py
+view_controller.py
+win32_capture.py
+output_writer.py
+requirements.txt
+requirements-exe.txt
+build_exe.bat
+sap2000_portable.spec
+sap2000_ci.spec
 ```
 
 ## Requisitos
@@ -21,113 +23,87 @@ SAP2000_Capturas.xlsx   → Plantilla de configuración
 | Requisito | Versión |
 |-----------|---------|
 | Windows | 10 o 11 |
-| SAP2000 | v23 |
-| Python | 3.8+ (solo para compilar el EXE) |
+| SAP2000 | v23, v24 o v25 |
+| Python | 3.8+ |
 
-## Flujo rápido
-
-1. **Crea la plantilla Excel**: `sap2000_capture.exe --crear-excel SAP2000_Capturas.xlsx`
-2. Completa las hojas `CONFIG` y `CAPTURAS`.
-3. Abre SAP2000 con el modelo cargado y la ventana visible.
-4. Ejecuta `sap2000_capture.exe`.
-
-## Usar el programa
-
-**Recomendado**: haz doble clic en `sap2000_capture.exe`.
-Si existe `SAP2000_Capturas.xlsx` en la misma carpeta, el EXE lo detecta automáticamente.
+## Instalación
 
 ```bat
-sap2000_capture.exe --config SAP2000_Capturas.xlsx
+pip install -r requirements.txt
+python Scripts/pywin32_postinstall.py -install
 ```
 
-Con Python (sin compilar):
+## Flujo
 
 ```bat
-python sap2000_gui.py --config SAP2000_Capturas.xlsx
+python main.py --generate-plan
+python main.py --list-cases
+python main.py --plan capture_plan.json --output outputs/proyecto_01
 ```
 
-### Interfaz gráfica
-
-La GUI tiene dos botones:
-
-1. **Conectar a SAP2000** — valida la conexión con SAP2000.
-2. **Extraer fotos** — lee el Excel y genera las capturas.
-
-### Opciones
+Opciones habituales:
 
 ```bat
-sap2000_capture.exe --config RUTA --allow-unsafe-output
+python main.py --plan plan.json --sap-dll "D:/SAP2000 23/SAP2000v1.dll"
+python main.py --plan plan.json --render-delay 1.2
+python main.py --plan plan.json -v
 ```
 
-| Opción | Descripción |
-|--------|-------------|
-| `--config RUTA` | Ruta al Excel de configuración |
-| `--crear-excel RUTA` | Genera la plantilla Excel y sale |
-| `--allow-unsafe-output` | Permitir carpeta de salida fuera del directorio del Excel |
+## Formato del plan
 
-También puedes usar la variable de entorno `SAP2000_ALLOW_UNSAFE_OUTPUT=1`.
+El plan puede ser JSON o Excel. Cada fila/entrada define una captura en orden.
 
-## Estructura del Excel
-
-### Hoja `CONFIG`
-
-| Celda | Descripción |
-|-------|-------------|
-| `B2` | Ruta del DLL de SAP2000 |
-| `B3` | Nombre del proyecto |
-| `B4` | Subcarpeta de salida |
-
-La salida por defecto se guarda en `Capturas_SAP` como subcarpeta del Excel.
-
-### Hoja `CAPTURAS`
-
-Cada fila activa define una imagen a generar.
-
-| Columna | Valor |
-|---------|-------|
-| `ACTIVO` | `SI` / `NO` |
-| `NOMBRE IMAGEN` | Nombre base de la captura |
-| `TIPO VISTA` | `PLANTA`, `ELEV_X`, `ELEV_Y`, `ISO_NE`, `ISO_NO`, `ISO_SE`, `ISO_SO`, `CUSTOM` |
-| `AZIMUT` | Solo para `CUSTOM` |
-| `ELEVACIÓN` | Solo para `CUSTOM` |
-| `MODO DISPLAY` | `MODELO` o `CARGAS` |
-| `PATRÓN DE CARGA` | Requerido si `MODO DISPLAY = CARGAS` |
-| `TIPO VENTANA` | `COMPLETA` o `PARCIAL` |
-| `RECORTE IZQ/SUP/DER/INF %` | Solo para `PARCIAL` |
-
-Ejemplo de salida:
-
-```
-Capturas_SAP\
-  MiProyecto_Vista_General_ISO_NE_MODELO.png
-  MiProyecto_Cargas_Muertas_ISO_NE_CARGAS_DEAD.png
+```json
+[
+  {
+    "filename": "vista_3d_muerta",
+    "view_type": "ISO_3D",
+    "display_type": "LOAD_CASE",
+    "case_name": "DEAD",
+    "description": "Vista isométrica carga muerta"
+  },
+  {
+    "filename": "modo_1",
+    "view_type": "ISO_3D",
+    "display_type": "MODE_SHAPE",
+    "case_name": "MODAL",
+    "mode_number": 1
+  }
+]
 ```
 
-## EXE portable (compilar)
+Valores principales:
 
-Build local (requiere PyInstaller):
+- `view_type`: `ISO_3D`, `PLAN_XY`, `ELEV_XZ`, `ELEV_YZ`
+- `display_type`: `GEOMETRY_ONLY`, `LOAD_PATTERN`, `LOAD_CASE`, `MODE_SHAPE`, `DEFORMED`, `FRAME_FORCES`
+- `case_name`: requerido para displays que dependen de un caso, patrón o combo
+- `mode_number`: requerido para `MODE_SHAPE`
+
+## Salida
+
+```
+outputs/proyecto_01/
+  001_vista_3d_muerta.png
+  002_modo_1.png
+  capture_log.json
+```
+
+El `capture_log.json` registra estado, timestamp, duración y archivo de salida por captura.
+
+## Build
 
 ```bat
 build_exe.bat
 ```
 
-Salida:
+Salida esperada:
 
+```text
+dist\sap_capture.exe
 ```
-dist\sap2000_capture.exe
-```
 
-Un solo archivo. Solo necesitas distribuir el `.exe` junto al Excel de configuración.
+## Notas
 
-## Solución de problemas
-
-| Problema | Causa probable | Acción |
-|----------|---------------|--------|
-| SAP2000 no detectado | SAP2000 no está abierto o visible | Abre el modelo y deja la ventana visible |
-| Error "ARCHIVO DLL NO ENCONTRADO" | Ruta del DLL incorrecta en CONFIG | Revisa la celda B2 del Excel |
-| Error "ERROR AL CARGAR LA BIBLIOTECA DE TIPO/DLL" | DLL dañado o versión incorrecta | Verifica la instalación de SAP2000 |
-| Error "ERROR DE PROGID COM" | SAP2000 mal instalado | Reinstala o repara SAP2000 |
-| Error "SAP2000 NO ESTÁ ABIERTO O NO RESPONDE" | SAP2000 no está en ejecución | Abre SAP2000 manualmente |
-| No se genera el `.xlsx` | No hay EXE ni Python | Compila el EXE o instala Python |
-| Fila ignorada | Config inválida en `CAPTURAS` | Revisa vista, display, patrón y recortes |
-| No escribe fuera de la carpeta del Excel | Modo seguro activo | Usa `--allow-unsafe-output` |
+- `PrintWindow` falla si SAP2000 está minimizado.
+- El plan Excel requiere `openpyxl`.
+- La conexión COM depende de `comtypes` y de una instalación válida de SAP2000.

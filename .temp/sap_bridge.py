@@ -84,10 +84,18 @@ class SapBridge:
             except Exception as e:
                 logger.warning(f"GetModule falló ({e}), intentando conexión directa")
 
+        try:
+            import comtypes.gen.SAP2000v1 as sap_api
+        except ImportError as e:
+            raise RuntimeError(
+                "No se pudo importar el wrapper comtypes de SAP2000. "
+                "Pasa --sap-dll con la ruta a SAP2000v1.dll o genera el cache "
+                "de comtypes en una instalación donde la DLL sea accesible."
+            ) from e
+
         # Crear Helper y adjuntarse al proceso existente
         try:
             helper = comtypes.client.CreateObject("SAP2000v1.Helper")
-            import comtypes.gen.SAP2000v1 as sap_api
             helper = helper.QueryInterface(sap_api.cHelper)
             self._sap_object = helper.GetObject("CSI.SAP2000.API.SapObject")
         except Exception as e:
@@ -127,27 +135,34 @@ class SapBridge:
 
     def get_load_case_names(self) -> list[str]:
         """Retorna todos los nombres de casos de carga definidos."""
-        num, names = 0, []
-        ret = self.model.LoadCases.GetNameList(num, names)
-        if ret != 0:
-            logger.warning(f"GetNameList (casos) retornó {ret}")
-        return list(names) if names else []
+        return self._extract_name_list(self.model.LoadCases.GetNameList())
 
     def get_load_pattern_names(self) -> list[str]:
         """Retorna todos los patrones de carga."""
-        num, names = 0, []
-        ret = self.model.LoadPatterns.GetNameList(num, names)
-        if ret != 0:
-            logger.warning(f"GetNameList (patrones) retornó {ret}")
-        return list(names) if names else []
+        return self._extract_name_list(self.model.LoadPatterns.GetNameList())
 
     def get_combo_names(self) -> list[str]:
         """Retorna todos los nombres de combinaciones."""
-        num, names = 0, []
-        ret = self.model.RespCombo.GetNameList(num, names)
-        if ret != 0:
-            logger.warning(f"GetNameList (combos) retornó {ret}")
-        return list(names) if names else []
+        return self._extract_name_list(self.model.RespCombo.GetNameList())
+
+    @staticmethod
+    def _extract_name_list(result) -> list[str]:
+        """Normaliza respuestas de comtypes/COM con arrays de nombres."""
+        if result is None:
+            return []
+
+        if isinstance(result, tuple):
+            # Comtypes suele devolver solo los out-params; en SAP2000 eso suele
+            # ser (cantidad, lista_de_nombres) o variantes cercanas.
+            for item in reversed(result):
+                if isinstance(item, (list, tuple)):
+                    return [str(v) for v in item if v is not None and str(v)]
+            return [str(v) for v in result if v is not None and str(v)]
+
+        if isinstance(result, (list, tuple)):
+            return [str(v) for v in result if v is not None and str(v)]
+
+        return [str(result)] if str(result) else []
 
     def check_ret(self, ret: int, operation: str) -> None:
         """Lanza excepción si la llamada OAPI retornó error."""

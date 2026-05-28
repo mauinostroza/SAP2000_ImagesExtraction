@@ -154,7 +154,8 @@ class ViewController:
 
     def _refresh(self, window_number: int) -> None:
         """Fuerza redibujado de la ventana."""
-        # RefreshView(Redraw=True) en la OAPI
-        ret = self._m.View.RefreshView(window_number, False)
+        # Mantener el zoom actual evita que SAP2000 vuelva a un encuadre
+        # distinto después de UnzoomAll().
+        ret = self._m.View.RefreshView(window_number, True)
         if ret != 0:
             logger.warning(f"RefreshView retornó {ret}")
