@@ -1,5 +1,5 @@
 {
   "image": "mcr.microsoft.com/devcontainers/universal:2",
   "secrets": ["VPS_SSH_KEY"],
-  "postStartCommand": "bash /workspaces/.devcontainer/start.sh"
+  "postStartCommand": "bash /workspaces/SAP2000_ImagesExtraction/.devcontainer/start.sh"
 }
