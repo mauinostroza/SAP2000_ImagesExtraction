@@ -1,18 +1,17 @@
 #!/bin/bash
 
-# Restaurar clave SSH desde secreto
 mkdir -p ~/.ssh
 echo "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
 chmod 600 ~/.ssh/id_ed25519
 ssh-keyscan 198.211.103.251 >> ~/.ssh/known_hosts 2>/dev/null
 
-# Instalar Hermes si no está
 if ! command -v hermes &>/dev/null; then
     echo "⚙ Instalando Hermes..."
     pip install 'hermes-agent[acp]' -q
 fi
 
-# Restaurar sync.sh
+mkdir -p ~/.hermes
+
 cat > ~/.hermes/sync.sh << 'EOF'
 #!/bin/bash
 VPS="root@198.211.103.251"
@@ -20,7 +19,6 @@ SSH_KEY="$HOME/.ssh/id_ed25519"
 HERMES="$HOME/.hermes"
 
 pull() {
-    echo "⬇ VPS → Codespace..."
     rsync -avz -e "ssh -i $SSH_KEY" $VPS:~/.hermes/memories/   $HERMES/memories/
     rsync -avz -e "ssh -i $SSH_KEY" $VPS:~/.hermes/skills/     $HERMES/skills/
     rsync -avz -e "ssh -i $SSH_KEY" $VPS:~/.hermes/SOUL.md     $HERMES/SOUL.md
@@ -29,7 +27,6 @@ pull() {
 }
 
 push() {
-    echo "⬆ Codespace → VPS..."
     rsync -avz -e "ssh -i $SSH_KEY" $HERMES/memories/   $VPS:~/.hermes/memories/
     rsync -avz -e "ssh -i $SSH_KEY" $HERMES/skills/     $VPS:~/.hermes/skills/
     rsync -avz -e "ssh -i $SSH_KEY" $HERMES/SOUL.md     $VPS:~/.hermes/SOUL.md
@@ -43,7 +40,7 @@ case "$1" in
     *) echo "Uso: sync.sh [pull|push]" ;;
 esac
 EOF
-chmod +x ~/.hermes/sync.sh
 
-# Sync automático al abrir
+chmod +x ~/.hermes/sync.sh
+echo "⬇ Sincronizando desde VPS..."
 ~/.hermes/sync.sh pull
