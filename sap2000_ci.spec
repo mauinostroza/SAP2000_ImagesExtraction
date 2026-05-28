@@ -5,7 +5,8 @@
 
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent
+spec_file = Path(globals().get("SPEC", "sap2000_ci.spec")).resolve()
+project_root = Path(globals().get("SPECPATH", spec_file.parent)).resolve()
 entry_point = project_root / "main.py"
 module_dir = project_root
 

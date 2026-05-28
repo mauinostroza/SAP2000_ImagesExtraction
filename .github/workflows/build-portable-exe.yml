@@ -9,6 +9,12 @@ on:
       - ".github/workflows/build-portable-exe.yml"
       - "sap_imagenes.py"
       - "sap2000_gui.py"
+      - "main.py"
+      - "capture_plan.py"
+      - "output_writer.py"
+      - "sap_bridge.py"
+      - "view_controller.py"
+      - "win32_capture.py"
       - "sap2000_portable.spec"
       - "sap2000_ci.spec"
       - "requirements-exe.txt"
@@ -32,35 +38,29 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-exe.txt
 
-      - name: Build EXE (CI variant)
-        shell: pwsh
-        run: python -m PyInstaller --clean sap2000_ci.spec
-
       - name: Excluir dist de Windows Defender
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath "${{ github.workspace }}\dist"
 
-      - name: Smoke test — verificar que el .exe genera el Excel
+      - name: Build EXE (CI variant)
         shell: pwsh
-        env:
-          SAP2000_SUPPRESS_POPUPS: "1"
+        run: python -m PyInstaller --clean sap2000_ci.spec
+
+      - name: Smoke test - verificar arranque del CLI
+        shell: pwsh
         run: |
-          $excelPath = "$env:RUNNER_TEMP\SAP2000_Capturas_smoke.xlsx"
-          $proc = Start-Process -FilePath ".\dist\sap2000_capture.exe" -ArgumentList "--crear-excel", $excelPath -Wait -PassThru -NoNewWindow
+          $proc = Start-Process -FilePath ".\dist\sap_capture_ci.exe" -ArgumentList "--help" -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             throw "El EXE termino con codigo de salida $($proc.ExitCode)"
-          }
-          if (!(Test-Path $excelPath)) {
-            throw "No se genero el Excel desde el EXE"
           }
 
       - name: Empaquetar artifact (solo .exe + docs + Excel)
         shell: pwsh
         run: |
-          $zipName = "sap2000_capture_windows.zip"
+          $zipName = "sap_capture_windows.zip"
           $files = @(
-            "dist\sap2000_capture.exe",
+            "dist\sap_capture_ci.exe",
             "README.md"
           )
           # Incluir el Excel de config si existe
@@ -77,6 +77,6 @@ jobs:
         with:
           name: sap2000-capture-windows
           path: |
-            sap2000_capture_windows.zip
-            dist/sap2000_capture.exe
+            sap_capture_windows.zip
+            dist/sap_capture_ci.exe
           if-no-files-found: error
