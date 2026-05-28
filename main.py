@@ -21,6 +21,7 @@ from pathlib import Path
 from capture_plan import generate_sample_plan, load_plan
 from output_writer import OutputWriter
 from sap_bridge import SapBridge
+from view_controller import ViewConfig
 from view_controller import ViewController
 
 
@@ -52,8 +53,15 @@ def cmd_list_cases(bridge: SapBridge) -> None:
     print()
 
 
-def run_capture_pipeline(
-    plan_path: str | Path,
+def launch_gui(argv: list[str] | None = None) -> int:
+    from sap2000_gui import launch_gui_app
+
+    launch_gui_app(argv, capture_runner=run_capture_configs)
+    return 0
+
+
+def run_capture_configs(
+    configs: list[ViewConfig],
     output_dir: str | Path,
     sap_dll_path: str | Path | None,
     render_delay: float,
@@ -61,13 +69,6 @@ def run_capture_pipeline(
 ) -> int:
     setup_logging(verbose)
     log = logging.getLogger("main")
-
-    log.info("Cargando plan: %s", plan_path)
-    try:
-        configs = load_plan(plan_path)
-    except Exception as exc:
-        log.error("No se pudo cargar el plan: %s", exc)
-        return 1
 
     if not configs:
         log.error("El plan está vacío.")
@@ -122,6 +123,32 @@ def run_capture_pipeline(
     return 0 if errors == 0 else 1
 
 
+def run_capture_pipeline(
+    plan_path: str | Path,
+    output_dir: str | Path,
+    sap_dll_path: str | Path | None,
+    render_delay: float,
+    verbose: bool,
+) -> int:
+    setup_logging(verbose)
+    log = logging.getLogger("main")
+
+    log.info("Cargando plan: %s", plan_path)
+    try:
+        configs = load_plan(plan_path)
+    except Exception as exc:
+        log.error("No se pudo cargar el plan: %s", exc)
+        return 1
+
+    return run_capture_configs(
+        configs=configs,
+        output_dir=output_dir,
+        sap_dll_path=sap_dll_path,
+        render_delay=render_delay,
+        verbose=verbose,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sap_capture",
@@ -167,15 +194,45 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Logging detallado (DEBUG)",
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Abre la interfaz gráfica para armar y ejecutar capturas",
+    )
     return parser
 
 
+def _arg_was_provided(names: tuple[str, ...]) -> bool:
+    for token in sys.argv[1:]:
+        for name in names:
+            if token == name or token.startswith(f"{name}="):
+                return True
+    return False
+
+
 def main() -> None:
+    if len(sys.argv) == 1:
+        sys.exit(launch_gui([]))
+
     parser = build_parser()
     args = parser.parse_args()
 
     setup_logging(args.verbose)
     log = logging.getLogger("main")
+
+    if args.gui:
+        gui_argv: list[str] = []
+        if _arg_was_provided(("--plan", "-p")):
+            gui_argv.extend(["--plan", args.plan])
+        if _arg_was_provided(("--output", "-o")):
+            gui_argv.extend(["--output", args.output])
+        if _arg_was_provided(("--sap-dll",)):
+            gui_argv.extend(["--sap-dll", args.sap_dll])
+        if _arg_was_provided(("--render-delay",)):
+            gui_argv.extend(["--render-delay", str(args.render_delay)])
+        if args.verbose:
+            gui_argv.append("--verbose")
+        sys.exit(launch_gui(gui_argv))
 
     if args.generate_plan:
         out = generate_sample_plan("capture_plan.json")

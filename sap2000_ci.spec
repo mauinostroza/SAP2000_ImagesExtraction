@@ -11,10 +11,16 @@ entry_point = project_root / "main.py"
 module_dir = project_root
 
 hiddenimports = [
+    "sap2000_gui",
     "comtypes",
     "comtypes.client",
     "comtypes.gen",
     "openpyxl",
+    "tkinter",
+    "tkinter.ttk",
+    "tkinter.filedialog",
+    "tkinter.messagebox",
+    "tkinter.scrolledtext",
     "pythoncom",
     "pywintypes",
     "win32con",
@@ -34,7 +40,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["matplotlib", "numpy", "pandas", "pyautogui", "tkinter", "xlwings"],
+    excludes=["matplotlib", "numpy", "pandas", "pyautogui", "xlwings"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

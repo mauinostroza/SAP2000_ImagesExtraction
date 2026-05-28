@@ -37,6 +37,31 @@ def _load_json(path: Path) -> list[ViewConfig]:
     return [_dict_to_config(item, i) for i, item in enumerate(data, start=1)]
 
 
+def _enum_from_data(enum_cls, raw_value, default, field_name: str, index: int):
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, enum_cls):
+        return raw_value
+
+    if isinstance(raw_value, str):
+        candidate = raw_value.strip()
+        if not candidate:
+            return default
+        try:
+            return enum_cls[candidate.upper()]
+        except KeyError:
+            pass
+        raw_value = candidate
+
+    try:
+        return enum_cls(int(raw_value))
+    except (TypeError, ValueError) as exc:
+        valid = [item.name for item in enum_cls]
+        raise ValueError(
+            f"Entrada {index}: {field_name}='{raw_value}' inválido. Opciones: {valid}"
+        ) from exc
+
+
 def _load_excel(path: Path) -> list[ViewConfig]:
     try:
         import openpyxl
@@ -87,19 +112,20 @@ def _dict_to_config(data: dict, index: int) -> ViewConfig:
     if not filename:
         raise ValueError(f"Entrada {index}: 'filename' es obligatorio")
 
-    vt_str = _str("view_type", "ISO_3D").upper()
-    try:
-        view_type = ViewType[vt_str]
-    except KeyError as exc:
-        valid = [item.name for item in ViewType]
-        raise ValueError(f"view_type='{vt_str}' inválido. Opciones: {valid}") from exc
-
-    dt_str = _str("display_type", "GEOMETRY_ONLY").upper()
-    try:
-        display_type = DisplayType[dt_str]
-    except KeyError as exc:
-        valid = [item.name for item in DisplayType]
-        raise ValueError(f"display_type='{dt_str}' inválido. Opciones: {valid}") from exc
+    view_type = _enum_from_data(
+        ViewType,
+        data.get("view_type", "ISO_3D"),
+        ViewType.ISO_3D,
+        "view_type",
+        index,
+    )
+    display_type = _enum_from_data(
+        DisplayType,
+        data.get("display_type", "GEOMETRY_ONLY"),
+        DisplayType.GEOMETRY_ONLY,
+        "display_type",
+        index,
+    )
 
     return ViewConfig(
         filename=filename,
@@ -113,85 +139,107 @@ def _dict_to_config(data: dict, index: int) -> ViewConfig:
     )
 
 
+def _config_to_dict(cfg: ViewConfig) -> dict[str, object]:
+    return {
+        "filename": cfg.filename,
+        "view_type": cfg.view_type.name,
+        "display_type": cfg.display_type.name,
+        "case_name": cfg.case_name,
+        "mode_number": cfg.mode_number,
+        "window_number": cfg.window_number,
+        "render_delay": cfg.render_delay,
+        "description": cfg.description,
+    }
+
+
+def serialize_plan(configs: list[ViewConfig]) -> list[dict[str, object]]:
+    return [_config_to_dict(cfg) for cfg in configs]
+
+
+def save_plan(configs: list[ViewConfig], output_path: str | Path = "capture_plan.json") -> Path:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(serialize_plan(configs), handle, ensure_ascii=False, indent=2)
+    logger.info("Plan guardado en: %s", output_path)
+    return output_path
+
+
 def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
     sample = [
-        {
-            "filename": "geometria_3d",
-            "view_type": "ISO_3D",
-            "display_type": "GEOMETRY_ONLY",
-            "description": "Vista isométrica, solo geometría",
-        },
-        {
-            "filename": "geometria_planta",
-            "view_type": "PLAN_XY",
-            "display_type": "GEOMETRY_ONLY",
-            "description": "Vista en planta",
-        },
-        {
-            "filename": "geometria_elevacion_xz",
-            "view_type": "ELEV_XZ",
-            "display_type": "GEOMETRY_ONLY",
-            "description": "Elevación X-Z",
-        },
-        {
-            "filename": "carga_muerta_3d",
-            "view_type": "ISO_3D",
-            "display_type": "LOAD_CASE",
-            "case_name": "DEAD",
-            "description": "Carga muerta, vista 3D",
-        },
-        {
-            "filename": "carga_viva_3d",
-            "view_type": "ISO_3D",
-            "display_type": "LOAD_CASE",
-            "case_name": "LIVE",
-            "description": "Carga viva, vista 3D",
-        },
-        {
-            "filename": "sismo_x_planta",
-            "view_type": "PLAN_XY",
-            "display_type": "LOAD_CASE",
-            "case_name": "QUAKE-X",
-            "description": "Sismo X, vista en planta",
-        },
-        {
-            "filename": "sismo_y_planta",
-            "view_type": "PLAN_XY",
-            "display_type": "LOAD_CASE",
-            "case_name": "QUAKE-Y",
-            "description": "Sismo Y, vista en planta",
-        },
-        {
-            "filename": "modo_1_3d",
-            "view_type": "ISO_3D",
-            "display_type": "MODE_SHAPE",
-            "case_name": "MODAL",
-            "mode_number": 1,
-            "render_delay": 0.3,
-            "description": "Modo 1 de vibración",
-        },
-        {
-            "filename": "modo_2_3d",
-            "view_type": "ISO_3D",
-            "display_type": "MODE_SHAPE",
-            "case_name": "MODAL",
-            "mode_number": 2,
-            "description": "Modo 2 de vibración",
-        },
-        {
-            "filename": "deformada_combo_env",
-            "view_type": "ISO_3D",
-            "display_type": "DEFORMED",
-            "case_name": "ENVELOPE",
-            "render_delay": 0.5,
-            "description": "Forma deformada, envolvente",
-        },
+        ViewConfig(
+            filename="geometria_3d",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.GEOMETRY_ONLY,
+            description="Vista isométrica, solo geometría",
+        ),
+        ViewConfig(
+            filename="geometria_planta",
+            view_type=ViewType.PLAN_XY,
+            display_type=DisplayType.GEOMETRY_ONLY,
+            description="Vista en planta",
+        ),
+        ViewConfig(
+            filename="geometria_elevacion_xz",
+            view_type=ViewType.ELEV_XZ,
+            display_type=DisplayType.GEOMETRY_ONLY,
+            description="Elevación X-Z",
+        ),
+        ViewConfig(
+            filename="carga_muerta_3d",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.LOAD_CASE,
+            case_name="DEAD",
+            description="Carga muerta, vista 3D",
+        ),
+        ViewConfig(
+            filename="carga_viva_3d",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.LOAD_CASE,
+            case_name="LIVE",
+            description="Carga viva, vista 3D",
+        ),
+        ViewConfig(
+            filename="sismo_x_planta",
+            view_type=ViewType.PLAN_XY,
+            display_type=DisplayType.LOAD_CASE,
+            case_name="QUAKE-X",
+            description="Sismo X, vista en planta",
+        ),
+        ViewConfig(
+            filename="sismo_y_planta",
+            view_type=ViewType.PLAN_XY,
+            display_type=DisplayType.LOAD_CASE,
+            case_name="QUAKE-Y",
+            description="Sismo Y, vista en planta",
+        ),
+        ViewConfig(
+            filename="modo_1_3d",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.MODE_SHAPE,
+            case_name="MODAL",
+            mode_number=1,
+            render_delay=0.3,
+            description="Modo 1 de vibración",
+        ),
+        ViewConfig(
+            filename="modo_2_3d",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.MODE_SHAPE,
+            case_name="MODAL",
+            mode_number=2,
+            description="Modo 2 de vibración",
+        ),
+        ViewConfig(
+            filename="deformada_combo_env",
+            view_type=ViewType.ISO_3D,
+            display_type=DisplayType.DEFORMED,
+            case_name="ENVELOPE",
+            render_delay=0.5,
+            description="Forma deformada, envolvente",
+        ),
     ]
-    output_path = Path(output_path)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(sample, handle, ensure_ascii=False, indent=2)
-    logger.info("Plan de ejemplo generado en: %s", output_path)
-    return output_path
+    return save_plan(sample, output_path)
 
 
 if __name__ == "__main__":

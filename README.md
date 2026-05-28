@@ -1,11 +1,12 @@
 # sap_capture
 
-CLI modular para capturar vistas de SAP2000 de forma autónoma usando `PrintWindow` (Win32), sin depender de que la ventana esté al frente ni del flujo GUI+Excel anterior.
+Aplicación para capturar vistas de SAP2000 usando `PrintWindow` (Win32). Al abrir el programa sin argumentos lanza una GUI para definir las capturas; el flujo CLI sigue disponible para automatización.
 
 ## Estructura
 
 ```
 main.py
+sap2000_gui.py
 capture_plan.py
 sap_bridge.py
 view_controller.py
@@ -24,7 +25,7 @@ sap2000_ci.spec
 |-----------|---------|
 | Windows | 10 o 11 |
 | SAP2000 | v23, v24 o v25 |
-| Python | 3.8+ |
+| Python | 3.10+ |
 
 ## Instalación
 
@@ -34,6 +35,22 @@ python Scripts/pywin32_postinstall.py -install
 ```
 
 ## Flujo
+
+### GUI
+
+```bat
+python main.py
+```
+
+La interfaz permite:
+
+- conectarse a SAP2000
+- leer `load patterns`, `load cases` y `combos` del modelo abierto
+- armar la lista de capturas sin escribir JSON manualmente
+- guardar o cargar el plan en JSON
+- ejecutar las capturas directamente
+
+### CLI
 
 ```bat
 python main.py --generate-plan
@@ -101,6 +118,8 @@ Salida esperada:
 ```text
 dist\sap_capture.exe
 ```
+
+Al ejecutar `sap_capture.exe` sin argumentos se abre la GUI.
 
 ## Notas
 
