@@ -1,0 +1,14 @@
+# requirements.txt — sap_capture
+# Instalar con: pip install -r requirements.txt
+
+# Win32 API — captura de ventanas y COM
+pywin32>=306
+
+# Procesamiento de imágenes
+Pillow>=10.0
+
+# COM tipado para SAP2000 API (preferido sobre win32com)
+comtypes>=1.4
+
+# Lectura de planes desde Excel (opcional)
+openpyxl>=3.1
