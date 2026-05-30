@@ -12,6 +12,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_SAP_DLL_CANDIDATES = (
+    r"C:\Program Files\Computers and Structures\SAP2000 26\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 25\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 24\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 23\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 26\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 25\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 24\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 23\SAP2000v1.dll",
+)
+
+
 class SapBridge:
     def __init__(self, sap_dll_path: str | Path | None = None):
         self._sap_object = None
@@ -21,18 +33,19 @@ class SapBridge:
         self._dll_path = Path(sap_dll_path) if sap_dll_path else self._find_dll()
 
     @staticmethod
-    def _find_dll() -> Path | None:
-        candidates = [
-            r"C:\Program Files\Computers and Structures\SAP2000 23\SAP2000v1.dll",
-            r"C:\Program Files\Computers and Structures\SAP2000 24\SAP2000v1.dll",
-            r"C:\Program Files\Computers and Structures\SAP2000 25\SAP2000v1.dll",
-            r"C:\Program Files (x86)\Computers and Structures\SAP2000 23\SAP2000v1.dll",
-        ]
-        for candidate in candidates:
+    def find_default_dll_path() -> Path | None:
+        for candidate in DEFAULT_SAP_DLL_CANDIDATES:
             path = Path(candidate)
             if path.exists():
                 logger.debug("DLL encontrado: %s", path)
                 return path
+        return None
+
+    @staticmethod
+    def _find_dll() -> Path | None:
+        path = SapBridge.find_default_dll_path()
+        if path is not None:
+            return path
         logger.warning(
             "SAP2000v1.dll no encontrado en rutas estándar. "
             "Pasa --sap-dll explícitamente si hace falta."
@@ -110,6 +123,17 @@ class SapBridge:
         self.disconnect()
 
     @staticmethod
+    def _split_name_text(text: str) -> list[str]:
+        stripped = text.strip()
+        if not stripped:
+            return []
+
+        for separator in ("\r\n", "\n", "\r", "\t", ";", ","):
+            if separator in stripped:
+                return [part.strip() for part in stripped.split(separator) if part.strip()]
+        return [stripped]
+
+    @staticmethod
     def _coerce_names(result: Any) -> list[str]:
         if result is None:
             return []
@@ -124,8 +148,7 @@ class SapBridge:
                 pass
 
         if isinstance(result, str):
-            name = result.strip()
-            return [name] if name else []
+            return SapBridge._split_name_text(result)
 
         if isinstance(result, tuple):
             for item in reversed(result):
@@ -141,9 +164,7 @@ class SapBridge:
                 if callable(getattr(item, "tolist", None)):
                     names.extend(SapBridge._coerce_names(item.tolist()))
                     continue
-                text = str(item).strip()
-                if text:
-                    names.append(text)
+                names.extend(SapBridge._split_name_text(str(item)))
             return names
 
         if isinstance(result, list):
@@ -154,13 +175,10 @@ class SapBridge:
                 if callable(getattr(item, "tolist", None)):
                     names.extend(SapBridge._coerce_names(item.tolist()))
                     continue
-                text = str(item).strip()
-                if text:
-                    names.append(text)
+                names.extend(SapBridge._split_name_text(str(item)))
             return names
 
-        text = str(result).strip()
-        return [text] if text else []
+        return SapBridge._split_name_text(str(result))
 
     def _resolve_attr(self, dotted_name: str):
         current = self.model

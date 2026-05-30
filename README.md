@@ -45,7 +45,10 @@ python main.py
 La interfaz permite:
 
 - conectarse a SAP2000
+- precargar automáticamente `SAP2000v1.dll` desde rutas estándar y cambiarlo con **Buscar** si hace falta
+- registrar en el panel de log la apertura de la GUI, la DLL usada y el estado de conexión/catálogo
 - leer `load patterns`, `load cases` y `combos` del modelo abierto
+- elegir cada `load pattern` individualmente desde una lista dedicada al definir capturas `LOAD_PATTERN`
 - armar la lista de capturas sin escribir JSON manualmente
 - guardar o cargar el plan en JSON
 - ejecutar las capturas directamente

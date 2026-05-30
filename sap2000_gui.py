@@ -88,8 +88,9 @@ class SapCaptureGui:
         self.configs: list[ViewConfig] = []
         self.selected_index: int | None = None
         self.current_plan_path: Path | None = Path(plan_path) if plan_path else None
+        default_sap_dll = Path(sap_dll_path) if sap_dll_path else SapBridge.find_default_dll_path()
 
-        self.sap_dll_var = tk.StringVar(value=sap_dll_path or "")
+        self.sap_dll_var = tk.StringVar(value=str(default_sap_dll) if default_sap_dll else "")
         self.output_dir_var = tk.StringVar(value=output_dir or str(Path.cwd() / "outputs"))
         self.render_delay_var = tk.StringVar(value=str(render_delay))
         self.verbose_var = tk.BooleanVar(value=verbose)
@@ -107,6 +108,11 @@ class SapCaptureGui:
         self.item_delay_var = tk.StringVar(value="0.0")
 
         self._build_ui()
+        logging.info("Interfaz SAP2000 Capture abierta")
+        if self.sap_dll_var.get():
+            logging.info("SAP2000 DLL por defecto: %s", self.sap_dll_var.get())
+        else:
+            logging.info("SAP2000 DLL por defecto no encontrada; usa Buscar para seleccionarla")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll_queue)
 
@@ -204,8 +210,34 @@ class SapCaptureGui:
         self.display_combo.bind("<<ComboboxSelected>>", lambda _e: self._sync_case_controls())
 
         ttk.Label(editor, text="Caso / patrón / combo").grid(row=0, column=4, sticky="w")
-        self.case_combo = ttk.Combobox(editor, textvariable=self.case_name_var)
-        self.case_combo.grid(row=1, column=4, sticky="ew", padx=6)
+        self.case_selector_frame = ttk.Frame(editor)
+        self.case_selector_frame.grid(row=1, column=4, sticky="ew", padx=6)
+        self.case_selector_frame.columnconfigure(0, weight=1)
+
+        self.case_combo = ttk.Combobox(
+            self.case_selector_frame,
+            textvariable=self.case_name_var,
+            state="readonly",
+        )
+        self.case_combo.grid(row=0, column=0, sticky="ew")
+        self.case_combo.bind("<<ComboboxSelected>>", self._on_case_combo_selected)
+
+        self.load_pattern_listbox = tk.Listbox(
+            self.case_selector_frame,
+            height=6,
+            exportselection=False,
+        )
+        self.load_pattern_listbox.grid(row=0, column=0, sticky="nsew")
+        self.load_pattern_listbox.bind("<<ListboxSelect>>", self._on_load_pattern_select)
+        self.load_pattern_scroll = ttk.Scrollbar(
+            self.case_selector_frame,
+            orient="vertical",
+            command=self.load_pattern_listbox.yview,
+        )
+        self.load_pattern_listbox.configure(yscrollcommand=self.load_pattern_scroll.set)
+        self.load_pattern_scroll.grid(row=0, column=1, sticky="ns")
+        self.load_pattern_listbox.grid_remove()
+        self.load_pattern_scroll.grid_remove()
 
         ttk.Label(editor, text="Modo").grid(row=0, column=5, sticky="w")
         self.mode_spin = ttk.Spinbox(editor, from_=1, to=999, textvariable=self.mode_number_var, width=8)
@@ -274,12 +306,16 @@ class SapCaptureGui:
         status.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
     def _browse_dll(self) -> None:
+        current = self.sap_dll_var.get().strip()
+        initialdir = str(Path(current).parent) if current else None
         path = filedialog.askopenfilename(
             title="Seleccionar SAP2000v1.dll",
+            initialdir=initialdir,
             filetypes=[("SAP2000 DLL", "*.dll"), ("Todos los archivos", "*.*")],
         )
         if path:
             self.sap_dll_var.set(path)
+            logging.info("SAP2000 DLL seleccionada manualmente: %s", path)
 
     def _browse_output_dir(self) -> None:
         path = filedialog.askdirectory(title="Seleccionar carpeta de salida")
@@ -303,7 +339,14 @@ class SapCaptureGui:
                     self._append_log(level, message)
                 elif kind == "catalog":
                     catalog = payload[0]
+                    catalog = {key: self._unique_options(value) for key, value in catalog.items()}
                     self.catalog = catalog
+                    logging.info(
+                        "Catálogo SAP2000 cargado: %s patrones, %s casos, %s combos",
+                        len(catalog["load_patterns"]),
+                        len(catalog["load_cases"]),
+                        len(catalog["combos"]),
+                    )
                     self.catalog_var.set(
                         f"Patrones: {len(catalog['load_patterns'])} | "
                         f"Casos: {len(catalog['load_cases'])} | "
@@ -340,6 +383,11 @@ class SapCaptureGui:
 
     def _connect_sap(self) -> None:
         sap_dll = self.sap_dll_var.get().strip() or None
+        logging.info("Conectando a SAP2000 desde la GUI")
+        if sap_dll:
+            logging.info("Usando SAP2000 DLL: %s", sap_dll)
+        else:
+            logging.info("Sin DLL explícita; se intentará conexión COM directa")
 
         def worker() -> None:
             try:
@@ -355,17 +403,32 @@ class SapCaptureGui:
 
         self._start_worker(worker, "Conectando a SAP2000 y leyendo catálogo...")
 
+    @staticmethod
+    def _unique_options(values: list[str]) -> list[str]:
+        options: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            for name in SapBridge._split_name_text(str(value)):
+                if name not in seen:
+                    options.append(name)
+                    seen.add(name)
+        return options
+
     def _catalog_values_for_display(self, display_name: str) -> list[str]:
         if display_name == DisplayType.LOAD_PATTERN.name:
-            return self.catalog.get("load_patterns", [])
+            return self._unique_options(self.catalog.get("load_patterns", []))
         if display_name in {
             DisplayType.LOAD_CASE.name,
             DisplayType.DEFORMED.name,
             DisplayType.FRAME_FORCES.name,
         }:
-            return sorted(set(self.catalog.get("load_cases", []) + self.catalog.get("combos", [])))
+            return sorted(
+                self._unique_options(
+                    self.catalog.get("load_cases", []) + self.catalog.get("combos", [])
+                )
+            )
         if display_name == DisplayType.MODE_SHAPE.name:
-            return self.catalog.get("load_cases", [])
+            return self._unique_options(self.catalog.get("load_cases", []))
         return []
 
     def _sync_case_controls(self) -> None:
@@ -375,20 +438,69 @@ class SapCaptureGui:
 
         if not needs_case:
             self.case_name_var.set("")
+            self.case_combo.grid_remove()
+            self.load_pattern_listbox.grid_remove()
+            self.load_pattern_scroll.grid_remove()
             self.case_combo.configure(values=[], state="disabled")
+            self.case_combo.set("")
         else:
-            if options:
-                self.case_combo.configure(values=options, state="readonly")
-                if self.case_name_var.get() not in options:
-                    self.case_name_var.set(options[0])
+            if display_name == DisplayType.LOAD_PATTERN.name:
+                self.case_combo.grid_remove()
+                self.load_pattern_listbox.grid(row=0, column=0, sticky="nsew")
+                self.load_pattern_scroll.grid(row=0, column=1, sticky="ns")
+                self._refresh_load_pattern_selector()
+                if options:
+                    self.load_pattern_listbox.configure(state="normal")
+                else:
+                    self.load_pattern_listbox.configure(state="disabled")
             else:
-                self.case_combo.configure(values=[], state="normal")
+                self.load_pattern_listbox.grid_remove()
+                self.load_pattern_scroll.grid_remove()
+                self.case_combo.grid(row=0, column=0, sticky="ew")
+                if options:
+                    self.case_combo.configure(values=options, state="readonly")
+                    if self.case_name_var.get() not in options:
+                        self.case_name_var.set(options[0])
+                else:
+                    self.case_combo.configure(values=[], state="normal")
+                    self.case_combo.set("")
+                if self.case_name_var.get() in options:
+                    self.case_combo.set(self.case_name_var.get())
 
         if display_name == DisplayType.MODE_SHAPE.name:
             self.mode_spin.configure(state="normal")
         else:
             self.mode_number_var.set("1")
             self.mode_spin.configure(state="disabled")
+
+    def _refresh_load_pattern_selector(self) -> None:
+        options = self.catalog.get("load_patterns", [])
+        current = self.case_name_var.get().strip()
+
+        self.load_pattern_listbox.delete(0, tk.END)
+        for option in options:
+            self.load_pattern_listbox.insert(tk.END, option)
+
+        if current in options:
+            index = options.index(current)
+            self.load_pattern_listbox.selection_set(index)
+            self.load_pattern_listbox.see(index)
+        elif options:
+            self.case_name_var.set(options[0])
+            self.load_pattern_listbox.selection_set(0)
+            self.load_pattern_listbox.see(0)
+        else:
+            self.case_name_var.set("")
+            self.load_pattern_listbox.selection_clear(0, tk.END)
+
+    def _on_case_combo_selected(self, _event=None) -> None:
+        self.case_name_var.set(self.case_combo.get().strip())
+
+    def _on_load_pattern_select(self, _event=None) -> None:
+        selected = self.load_pattern_listbox.curselection()
+        if not selected:
+            return
+        self.case_name_var.set(self.load_pattern_listbox.get(selected[0]))
 
     def _config_from_form(self) -> ViewConfig:
         filename = self.filename_var.get().strip()
@@ -459,6 +571,7 @@ class SapCaptureGui:
         self.window_number_var.set("0")
         self.item_delay_var.set("0.0")
         self.tree.selection_remove(self.tree.selection())
+        self.load_pattern_listbox.selection_clear(0, tk.END)
         self._sync_case_controls()
 
     def _add_config(self) -> None:
