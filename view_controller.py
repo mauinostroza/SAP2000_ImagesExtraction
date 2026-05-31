@@ -96,7 +96,11 @@ class ViewController:
     def _set_view_angle(self, cfg: ViewConfig) -> int:
         failures: list[str] = []
         for window_number in self._window_candidates(cfg.window_number):
-            ret = self._m.View.SetView(window_number, int(cfg.view_type))
+            try:
+                ret = self._m.View.SetView(window_number, int(cfg.view_type))
+            except Exception as exc:
+                failures.append(f"{window_number}->exc:{exc!r}")
+                continue
             if ret == 0:
                 if window_number != cfg.window_number:
                     logger.warning(
@@ -115,11 +119,19 @@ class ViewController:
         return cfg.window_number
 
     def _zoom_all(self, window_number: int) -> None:
-        ret = self._m.View.UnzoomAll(window_number)
+        try:
+            ret = self._m.View.UnzoomAll(window_number)
+        except Exception as exc:
+            logger.warning("UnzoomAll(%s) lanzo excepcion: %r", window_number, exc)
+            return
         if ret != 0:
             logger.warning("UnzoomAll(%s) retorno %s", window_number, ret)
 
     def _refresh(self, window_number: int) -> None:
-        ret = self._m.View.RefreshView(window_number, True)
+        try:
+            ret = self._m.View.RefreshView(window_number, True)
+        except Exception as exc:
+            logger.warning("RefreshView(%s) lanzo excepcion: %r", window_number, exc)
+            return
         if ret != 0:
             logger.warning("RefreshView(%s) retorno %s", window_number, ret)
