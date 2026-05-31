@@ -127,6 +127,10 @@ class SapCaptureGui:
         self.mode_number_var = tk.StringVar(value="1")
         self.window_number_var = tk.StringVar(value="0")
         self.item_delay_var = tk.StringVar(value="0.0")
+        self.azimuth_var = tk.StringVar()
+        self.elevation_var = tk.StringVar()
+        self.is_extruded_var = tk.BooleanVar(value=False)
+        self.ui_required_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         logging.info("Interfaz SAP2000 Capture abierta")
@@ -141,6 +145,7 @@ class SapCaptureGui:
         if self.current_plan_path and self.current_plan_path.exists():
             self._load_plan_file(self.current_plan_path)
         self._sync_case_controls()
+        self._sync_view_controls()
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -222,7 +227,7 @@ class SapCaptureGui:
 
         editor = ttk.LabelFrame(main_panel, text="Definición de captura", padding=10)
         editor.grid(row=1, column=0, sticky="ew", pady=(10, 10))
-        for idx in range(7):
+        for idx in range(8):
             editor.columnconfigure(idx, weight=1)
 
         ttk.Label(editor, text="Nombre archivo").grid(row=0, column=0, sticky="w")
@@ -239,6 +244,7 @@ class SapCaptureGui:
             state="readonly",
         )
         self.view_combo.grid(row=1, column=2, sticky="ew", padx=6)
+        self.view_combo.bind("<<ComboboxSelected>>", lambda _e: self._sync_view_controls())
 
         ttk.Label(editor, text="Display").grid(row=0, column=3, sticky="w")
         self.display_combo = ttk.Combobox(
@@ -287,11 +293,28 @@ class SapCaptureGui:
         ttk.Label(editor, text="Ventana").grid(row=0, column=6, sticky="w")
         ttk.Spinbox(editor, from_=0, to=99, textvariable=self.window_number_var, width=8).grid(row=1, column=6, sticky="w", padx=(6, 0))
 
-        ttk.Label(editor, text="Delay extra").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(editor, textvariable=self.item_delay_var, width=12).grid(row=3, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(editor, text="Azimut").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.azimuth_entry = ttk.Entry(editor, textvariable=self.azimuth_var, width=12)
+        self.azimuth_entry.grid(row=3, column=0, sticky="w", padx=(0, 6))
+
+        ttk.Label(editor, text="Elevacion").grid(row=2, column=1, sticky="w", pady=(10, 0))
+        self.elevation_entry = ttk.Entry(editor, textvariable=self.elevation_var, width=12)
+        self.elevation_entry.grid(row=3, column=1, sticky="w", padx=6)
+
+        ttk.Label(editor, text="Delay extra").grid(row=2, column=2, sticky="w", pady=(10, 0))
+        ttk.Entry(editor, textvariable=self.item_delay_var, width=12).grid(row=3, column=2, sticky="w", padx=6)
+
+        ttk.Checkbutton(editor, text="Vista extruida", variable=self.is_extruded_var).grid(
+            row=3, column=3, sticky="w", padx=6
+        )
+        ttk.Checkbutton(
+            editor,
+            text="Requiere UI automation",
+            variable=self.ui_required_var,
+        ).grid(row=3, column=4, sticky="w", padx=6)
 
         form_actions = ttk.Frame(editor)
-        form_actions.grid(row=3, column=1, columnspan=6, sticky="e")
+        form_actions.grid(row=3, column=5, columnspan=3, sticky="e")
         ttk.Button(form_actions, text="Limpiar", command=self._clear_form).grid(row=0, column=0, padx=(0, 4))
         ttk.Button(form_actions, text="Actualizar fila", command=self._update_selected,).grid(row=0, column=1, padx=4)
         ttk.Button(form_actions, text="Agregar fila", command=self._add_config).grid(row=0, column=2, padx=(4, 0))
@@ -301,7 +324,19 @@ class SapCaptureGui:
         list_box.columnconfigure(0, weight=1)
         list_box.rowconfigure(0, weight=1)
 
-        columns = ("idx", "filename", "view", "display", "case", "mode", "window", "delay", "description")
+        columns = (
+            "idx",
+            "filename",
+            "view",
+            "display",
+            "case",
+            "camera",
+            "flags",
+            "mode",
+            "window",
+            "delay",
+            "description",
+        )
         self.tree = ttk.Treeview(list_box, columns=columns, show="headings", height=16)
         headings = {
             "idx": "#",
@@ -309,12 +344,26 @@ class SapCaptureGui:
             "view": "Vista",
             "display": "Display",
             "case": "Caso/Patrón/Combo",
+            "camera": "Camara",
+            "flags": "Flags",
             "mode": "Modo",
             "window": "Ventana",
             "delay": "Delay",
             "description": "Descripción",
         }
-        widths = {"idx": 50, "filename": 180, "view": 90, "display": 120, "case": 180, "mode": 55, "window": 65, "delay": 65, "description": 260}
+        widths = {
+            "idx": 50,
+            "filename": 180,
+            "view": 90,
+            "display": 120,
+            "case": 180,
+            "camera": 110,
+            "flags": 125,
+            "mode": 55,
+            "window": 65,
+            "delay": 65,
+            "description": 220,
+        }
         for key in columns:
             self.tree.heading(key, text=headings[key])
             self.tree.column(key, width=widths[key], anchor="w")
@@ -526,6 +575,12 @@ class SapCaptureGui:
             self.mode_number_var.set("1")
             self.mode_spin.configure(state="disabled")
 
+    def _sync_view_controls(self) -> None:
+        is_iso = self.view_type_var.get() == ViewType.ISO_3D.name
+        state = "normal" if is_iso else "disabled"
+        self.azimuth_entry.configure(state=state)
+        self.elevation_entry.configure(state=state)
+
     def _refresh_load_pattern_selector(self) -> None:
         options = self.catalog.get("load_patterns", [])
         current = self.case_name_var.get().strip()
@@ -577,6 +632,22 @@ class SapCaptureGui:
         except ValueError as exc:
             raise ValueError("El delay extra debe ser numérico.") from exc
         try:
+            azimuth = (
+                float(self.azimuth_var.get().strip())
+                if self.azimuth_var.get().strip()
+                else None
+            )
+        except ValueError as exc:
+            raise ValueError("El azimut debe ser numérico.") from exc
+        try:
+            elevation = (
+                float(self.elevation_var.get().strip())
+                if self.elevation_var.get().strip()
+                else None
+            )
+        except ValueError as exc:
+            raise ValueError("La elevacion debe ser numérica.") from exc
+        try:
             window_number = int(self.window_number_var.get().strip() or "0")
         except ValueError as exc:
             raise ValueError("El número de ventana debe ser entero.") from exc
@@ -590,7 +661,28 @@ class SapCaptureGui:
             mode_number=mode_number,
             window_number=window_number,
             render_delay=render_delay,
+            azimuth=azimuth,
+            elevation=elevation,
+            is_extruded=self.is_extruded_var.get(),
+            ui_automation_required=self.ui_required_var.get(),
         )
+
+    @staticmethod
+    def _format_camera(cfg: ViewConfig) -> str:
+        if cfg.azimuth is None and cfg.elevation is None:
+            return ""
+        az = "" if cfg.azimuth is None else f"az={cfg.azimuth:g}"
+        el = "" if cfg.elevation is None else f"el={cfg.elevation:g}"
+        return " ".join(part for part in (az, el) if part)
+
+    @staticmethod
+    def _format_flags(cfg: ViewConfig) -> str:
+        flags: list[str] = []
+        if cfg.is_extruded:
+            flags.append("extruida")
+        if cfg.ui_automation_required:
+            flags.append("ui")
+        return ", ".join(flags)
 
     def _refresh_tree(self) -> None:
         for item in self.tree.get_children():
@@ -606,6 +698,8 @@ class SapCaptureGui:
                     cfg.view_type.name,
                     cfg.display_type.name,
                     cfg.case_name,
+                    self._format_camera(cfg),
+                    self._format_flags(cfg),
                     cfg.mode_number,
                     cfg.window_number,
                     cfg.render_delay,
@@ -623,6 +717,10 @@ class SapCaptureGui:
         self.mode_number_var.set("1")
         self.window_number_var.set("0")
         self.item_delay_var.set("0.0")
+        self.azimuth_var.set("")
+        self.elevation_var.set("")
+        self.is_extruded_var.set(False)
+        self.ui_required_var.set(False)
         self.tree.selection_remove(self.tree.selection())
         self.load_pattern_listbox.selection_clear(0, tk.END)
         self._sync_case_controls()
@@ -667,6 +765,10 @@ class SapCaptureGui:
         self.mode_number_var.set(str(cfg.mode_number))
         self.window_number_var.set(str(cfg.window_number))
         self.item_delay_var.set(str(cfg.render_delay))
+        self.azimuth_var.set("" if cfg.azimuth is None else f"{cfg.azimuth:g}")
+        self.elevation_var.set("" if cfg.elevation is None else f"{cfg.elevation:g}")
+        self.is_extruded_var.set(cfg.is_extruded)
+        self.ui_required_var.set(cfg.ui_automation_required)
         self._sync_case_controls()
 
     def _delete_selected(self) -> None:
@@ -691,6 +793,10 @@ class SapCaptureGui:
             mode_number=cfg.mode_number,
             window_number=cfg.window_number,
             render_delay=cfg.render_delay,
+            azimuth=cfg.azimuth,
+            elevation=cfg.elevation,
+            is_extruded=cfg.is_extruded,
+            ui_automation_required=cfg.ui_automation_required,
             description=cfg.description,
         )
         self.configs.insert(self.selected_index + 1, duplicate)

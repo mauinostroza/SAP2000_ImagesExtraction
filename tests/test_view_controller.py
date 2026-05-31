@@ -43,6 +43,23 @@ class _FakeModel:
         self.View = view
 
 
+class _FakeUI:
+    def __init__(self, enabled=True, set_vista_result=True, set_extrusion_result=False):
+        self.enabled = enabled
+        self.set_vista_result = set_vista_result
+        self.set_extrusion_result = set_extrusion_result
+        self.set_vista_calls = []
+        self.set_extrusion_calls = []
+
+    def set_vista(self, view_type, azimuth=None, elevation=None):
+        self.set_vista_calls.append((view_type, azimuth, elevation))
+        return self.set_vista_result
+
+    def set_extrusion(self, enabled):
+        self.set_extrusion_calls.append(enabled)
+        return self.set_extrusion_result
+
+
 class ViewControllerTests(unittest.TestCase):
     @patch("view_controller.time.sleep", return_value=None)
     def test_apply_retries_set_view_with_window_one(self, _sleep):
@@ -100,6 +117,51 @@ class ViewControllerTests(unittest.TestCase):
         self.assertEqual(fake_view.set_view_calls, [(0, 0)])
         self.assertEqual(fake_view.unzoom_calls, [0])
         self.assertEqual(fake_view.refresh_calls, [(0, True)])
+
+    @patch("view_controller.time.sleep", return_value=None)
+    def test_apply_forwards_custom_angles_to_ui_fallback(self, _sleep):
+        fake_view = _FakeView([RuntimeError("SetView"), RuntimeError("SetView")])
+        fake_ui = _FakeUI(enabled=True, set_vista_result=True)
+        controller = ViewController(_FakeModel(fake_view), base_render_delay=0.0, ui_controller=fake_ui)
+        cfg = ViewConfig(
+            filename="geom",
+            view_type=ViewType.ISO_3D,
+            azimuth=210,
+            elevation=25,
+        )
+
+        controller.apply(cfg)
+
+        self.assertEqual(len(fake_ui.set_vista_calls), 1)
+        self.assertEqual(fake_ui.set_vista_calls[0][1:], (210, 25))
+
+    @patch("view_controller.time.sleep", return_value=None)
+    def test_apply_requires_ui_when_flagged(self, _sleep):
+        fake_view = _FakeView([RuntimeError("SetView"), RuntimeError("SetView")])
+        controller = ViewController(_FakeModel(fake_view), base_render_delay=0.0)
+        cfg = ViewConfig(
+            filename="geom",
+            view_type=ViewType.ISO_3D,
+            ui_automation_required=True,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "requiere automatizacion UI armada"):
+            controller.apply(cfg)
+
+    @patch("view_controller.time.sleep", return_value=None)
+    def test_apply_tracks_extrusion_via_ui_when_requested(self, _sleep):
+        fake_view = _FakeView([0])
+        fake_ui = _FakeUI(enabled=True, set_vista_result=False, set_extrusion_result=False)
+        controller = ViewController(_FakeModel(fake_view), base_render_delay=0.0, ui_controller=fake_ui)
+        cfg = ViewConfig(
+            filename="geom",
+            view_type=ViewType.ISO_3D,
+            is_extruded=True,
+        )
+
+        controller.apply(cfg)
+
+        self.assertEqual(fake_ui.set_extrusion_calls, [True])
 
 
 if __name__ == "__main__":

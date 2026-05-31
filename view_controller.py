@@ -40,6 +40,10 @@ class ViewConfig:
     mode_number: int = 1
     window_number: int = 0
     render_delay: float = 0.0
+    azimuth: float | None = None
+    elevation: float | None = None
+    is_extruded: bool = False
+    ui_automation_required: bool = False
     description: str = ""
 
 
@@ -50,8 +54,13 @@ class ViewController:
         self._ui = ui_controller
 
     def apply(self, cfg: ViewConfig) -> None:
+        if cfg.ui_automation_required and (self._ui is None or not self._ui.enabled):
+            raise RuntimeError(
+                f"La captura '{cfg.filename}' requiere automatizacion UI armada."
+            )
         self._set_display(cfg)
         target_window = self._set_view_angle(cfg)
+        self._set_extrusion(cfg)
         self._zoom_all(target_window)
         self._refresh(target_window)
         total_wait = self._delay + cfg.render_delay
@@ -127,11 +136,48 @@ class ViewController:
         )
         if self._ui is not None:
             try:
-                if self._ui.set_vista(SapUIView(int(cfg.view_type))):
+                if self._ui.set_vista(
+                    SapUIView(int(cfg.view_type)),
+                    azimuth=cfg.azimuth,
+                    elevation=cfg.elevation,
+                ):
                     return cfg.window_number
             except Exception as exc:
                 logger.warning("UI set_vista fallo para '%s': %r", cfg.filename, exc)
+        if cfg.ui_automation_required:
+            raise RuntimeError(
+                f"No se pudo aplicar la vista requerida para '{cfg.filename}'."
+            )
         return cfg.window_number
+
+    def _set_extrusion(self, cfg: ViewConfig) -> None:
+        method = getattr(self._m.View, "SetExtrude", None)
+        if method is not None:
+            try:
+                ret = method(cfg.window_number, bool(cfg.is_extruded))
+            except Exception as exc:
+                logger.warning("SetExtrude(%s) lanzo excepcion: %r", cfg.window_number, exc)
+            else:
+                if ret != 0:
+                    logger.warning("SetExtrude(%s) retorno %s", cfg.window_number, ret)
+                    return
+                return
+
+        if self._ui is None:
+            return
+        try:
+            applied = self._ui.set_extrusion(cfg.is_extruded)
+        except Exception as exc:
+            logger.warning("UI set_extrusion fallo para '%s': %r", cfg.filename, exc)
+            if cfg.ui_automation_required:
+                raise RuntimeError(
+                    f"No se pudo aplicar la extrusion requerida para '{cfg.filename}'."
+                ) from exc
+            return
+        if not applied and cfg.ui_automation_required:
+            raise RuntimeError(
+                f"No se pudo aplicar la extrusion requerida para '{cfg.filename}'."
+            )
 
     def _zoom_all(self, window_number: int) -> None:
         try:

@@ -24,7 +24,7 @@ from sap_bridge import SapBridge
 from view_controller import ViewConfig
 from view_controller import ViewController
 
-APP_VERSION = "dev-2026-05-30-02"
+APP_VERSION = "dev-2026-05-31-01"
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -74,6 +74,10 @@ def run_capture_configs(
     setup_logging(verbose)
     log = logging.getLogger("main")
     log.info("SAP2000 Capture runtime: %s", APP_VERSION)
+    log.info(
+        "UI automation: %s",
+        "armada" if ui_automation_enabled else "desarmada",
+    )
 
     if not configs:
         log.error("El plan está vacío.")

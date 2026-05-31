@@ -108,6 +108,14 @@ def _dict_to_config(data: dict, index: int) -> ViewConfig:
         except (TypeError, ValueError):
             return default
 
+    def _bool(key: str, default: bool = False) -> bool:
+        value = data.get(key)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "si", "sí", "yes"}
+
     filename = _str("filename")
     if not filename:
         raise ValueError(f"Entrada {index}: 'filename' es obligatorio")
@@ -135,6 +143,10 @@ def _dict_to_config(data: dict, index: int) -> ViewConfig:
         mode_number=_int("mode_number", 1),
         window_number=_int("window_number", 0),
         render_delay=_float("render_delay", 0.0),
+        azimuth=_float("azimuth", None) if data.get("azimuth") not in (None, "") else None,
+        elevation=_float("elevation", None) if data.get("elevation") not in (None, "") else None,
+        is_extruded=_bool("is_extruded", False),
+        ui_automation_required=_bool("ui_automation_required", False),
         description=_str("description"),
     )
 
@@ -148,6 +160,10 @@ def _config_to_dict(cfg: ViewConfig) -> dict[str, object]:
         "mode_number": cfg.mode_number,
         "window_number": cfg.window_number,
         "render_delay": cfg.render_delay,
+        "azimuth": cfg.azimuth,
+        "elevation": cfg.elevation,
+        "is_extruded": cfg.is_extruded,
+        "ui_automation_required": cfg.ui_automation_required,
         "description": cfg.description,
     }
 
@@ -171,6 +187,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             filename="geometria_3d",
             view_type=ViewType.ISO_3D,
             display_type=DisplayType.GEOMETRY_ONLY,
+            azimuth=225,
+            elevation=30,
             description="Vista isométrica, solo geometría",
         ),
         ViewConfig(
@@ -190,6 +208,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             view_type=ViewType.ISO_3D,
             display_type=DisplayType.LOAD_CASE,
             case_name="DEAD",
+            azimuth=225,
+            elevation=30,
             description="Carga muerta, vista 3D",
         ),
         ViewConfig(
@@ -197,6 +217,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             view_type=ViewType.ISO_3D,
             display_type=DisplayType.LOAD_CASE,
             case_name="LIVE",
+            azimuth=225,
+            elevation=30,
             description="Carga viva, vista 3D",
         ),
         ViewConfig(
@@ -220,6 +242,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             case_name="MODAL",
             mode_number=1,
             render_delay=0.3,
+            azimuth=225,
+            elevation=30,
             description="Modo 1 de vibración",
         ),
         ViewConfig(
@@ -228,6 +252,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             display_type=DisplayType.MODE_SHAPE,
             case_name="MODAL",
             mode_number=2,
+            azimuth=225,
+            elevation=30,
             description="Modo 2 de vibración",
         ),
         ViewConfig(
@@ -236,6 +262,8 @@ def generate_sample_plan(output_path: str | Path = "capture_plan.json") -> Path:
             display_type=DisplayType.DEFORMED,
             case_name="ENVELOPE",
             render_delay=0.5,
+            azimuth=225,
+            elevation=30,
             description="Forma deformada, envolvente",
         ),
     ]

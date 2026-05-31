@@ -18,6 +18,7 @@ user32 = ctypes.windll.user32
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
+VK_SHIFT = 0x10
 
 VK_MAP = {
     "alt": 0x12,
@@ -38,7 +39,7 @@ class _KEYBDINPUT(ctypes.Structure):
         ("wScan", ctypes.c_ushort),
         ("dwFlags", ctypes.c_ulong),
         ("time", ctypes.c_ulong),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ctypes.c_void_p),
     ]
 
 
@@ -57,7 +58,7 @@ class SapUIView(IntEnum):
     ELEV_YZ = 3
 
 
-VIEW_ANGLES = {
+DEFAULT_VIEW_ANGLES = {
     SapUIView.ISO_3D: (225, 30),
 }
 
@@ -98,21 +99,70 @@ def _unicode_event(char: str, keyup: bool = False) -> _INPUT:
     )
 
 
+def _keybd_event(vk: int, keyup: bool = False) -> None:
+    flags = KEYEVENTF_KEYUP if keyup else 0
+    user32.keybd_event(vk, 0, flags, 0)
+
+
+def _send_vk_press(vk: int) -> None:
+    try:
+        _send_input(_key_event(vk), _key_event(vk, keyup=True))
+    except Exception:
+        _keybd_event(vk)
+        time.sleep(0.02)
+        _keybd_event(vk, keyup=True)
+
+
+def _send_hotkey(vks: list[int]) -> None:
+    try:
+        downs = [_key_event(vk) for vk in vks]
+        ups = [_key_event(vk, keyup=True) for vk in reversed(vks)]
+        _send_input(*(downs + ups))
+        return
+    except Exception:
+        pass
+    for vk in vks:
+        _keybd_event(vk)
+        time.sleep(0.02)
+    for vk in reversed(vks):
+        _keybd_event(vk, keyup=True)
+        time.sleep(0.02)
+
+
+def _vk_combo_for_char(char: str) -> tuple[list[int], int] | None:
+    code = user32.VkKeyScanW(ord(char))
+    if code == -1:
+        return None
+    vk = code & 0xFF
+    shift_state = (code >> 8) & 0xFF
+    modifiers: list[int] = []
+    if shift_state & 0x01:
+        modifiers.append(VK_SHIFT)
+    if shift_state & 0x02:
+        modifiers.append(VK_MAP["ctrl"])
+    if shift_state & 0x04:
+        modifiers.append(VK_MAP["alt"])
+    return modifiers, vk
+
+
 def press_key(key: str) -> None:
     vk = _vk_for_key(key)
-    _send_input(_key_event(vk), _key_event(vk, keyup=True))
+    _send_vk_press(vk)
 
 
 def hotkey(*keys: str) -> None:
     vks = [_vk_for_key(key) for key in keys]
-    downs = [_key_event(vk) for vk in vks]
-    ups = [_key_event(vk, keyup=True) for vk in reversed(vks)]
-    _send_input(*(downs + ups))
+    _send_hotkey(vks)
 
 
 def write_text(text: str, interval: float = 0.04) -> None:
     for char in text:
-        _send_input(_unicode_event(char), _unicode_event(char, keyup=True))
+        combo = _vk_combo_for_char(char)
+        if combo is None:
+            _send_input(_unicode_event(char), _unicode_event(char, keyup=True))
+        else:
+            modifiers, vk = combo
+            _send_hotkey([*modifiers, vk])
         if interval > 0:
             time.sleep(interval)
 
@@ -163,6 +213,13 @@ class SAP2000UIController:
         if not self._foreground_belongs_to_sap():
             raise UIAutomationAborted(f"foco fuera de SAP2000 antes de {step}")
 
+    def _cancel_if_possible(self) -> None:
+        try:
+            if self._foreground_belongs_to_sap():
+                press_key("escape")
+        except Exception:
+            pass
+
     def _run_guarded(self, step: str, action, pause: float = 0.0) -> None:
         self._assert_safe_context(step)
         action()
@@ -176,15 +233,24 @@ class SAP2000UIController:
         time.sleep(0.25)
         self._assert_safe_context("activar ventana")
 
-    def set_vista(self, view_type: SapUIView) -> bool:
+    def set_vista(
+        self,
+        view_type: SapUIView,
+        azimuth: float | None = None,
+        elevation: float | None = None,
+    ) -> bool:
         if not self.enabled:
             logger.info("Automatizacion UI desarmada; no se enviaran teclas para vista.")
             return False
-        if view_type not in VIEW_ANGLES:
+        if view_type not in DEFAULT_VIEW_ANGLES:
             logger.info("UI vista no implementada para %s; se conserva la actual.", view_type.name)
             return False
 
-        azimut, elevacion = VIEW_ANGLES[view_type]
+        azimut, elevacion = DEFAULT_VIEW_ANGLES[view_type]
+        if azimuth is not None:
+            azimut = azimuth
+        if elevation is not None:
+            elevacion = elevation
         logger.info("UI vista %s -> az=%s el=%s", view_type.name, azimut, elevacion)
         self.activar()
         try:
@@ -195,6 +261,7 @@ class SAP2000UIController:
             return True
         except UIAutomationAborted as exc:
             logger.warning("Automatizacion UI abortada en vista: %s", exc)
+            self._cancel_if_possible()
             return False
 
     def mostrar_cargas_patron(self, patron: str) -> bool:
@@ -215,15 +282,22 @@ class SAP2000UIController:
             return True
         except UIAutomationAborted as exc:
             logger.warning("Automatizacion UI abortada en cargas: %s", exc)
+            self._cancel_if_possible()
             return False
         except Exception as exc:
             logger.warning("No se pudo seleccionar patron en dialogo: %r", exc)
-            try:
-                if self._foreground_belongs_to_sap():
-                    press_key("escape")
-            except Exception:
-                pass
+            self._cancel_if_possible()
             return False
+
+    def set_extrusion(self, enabled: bool) -> bool:
+        if not enabled:
+            logger.info("Vista extruida desactivada; se conserva el estado visual actual.")
+            return False
+        if not self.enabled:
+            logger.info("Automatizacion UI desarmada; no se enviaran teclas para extrusion.")
+            return False
+        logger.info("UI extrusion solicitada, pero aun no esta implementada.")
+        return False
 
     def _abrir_dialogo_set3dview(self) -> None:
         self._run_guarded("abrir menu view", lambda: hotkey("alt", "v"), pause=0.3)
@@ -254,9 +328,5 @@ class SAP2000UIController:
             raise
         except Exception as exc:
             logger.warning("No se pudo ingresar angulos en dialogo: %r", exc)
-            try:
-                if self._foreground_belongs_to_sap():
-                    press_key("escape")
-            except Exception:
-                pass
+            self._cancel_if_possible()
             raise
