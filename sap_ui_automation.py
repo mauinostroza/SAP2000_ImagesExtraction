@@ -19,6 +19,8 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_SHIFT = 0x10
+MF_BYPOSITION = 0x400
+WM_COMMAND = 0x0111
 
 VK_MAP = {
     "alt": 0x12,
@@ -65,6 +67,10 @@ DEFAULT_VIEW_ANGLES = {
 
 class UIAutomationAborted(RuntimeError):
     pass
+
+
+def _normalize_menu_text(text: str) -> str:
+    return text.replace("&", "").split("\t", 1)[0].strip().lower()
 
 
 def _vk_for_key(key: str) -> int:
@@ -185,6 +191,7 @@ class SAP2000UIController:
         else:
             raise TypeError("stop_requested debe ser callable, Event o None")
         self.sap_pid = self._get_window_pid(hwnd)
+        self._menu_dumped = False
 
     def _is_escape_pressed(self) -> bool:
         return bool(user32.GetAsyncKeyState(VK_MAP["escape"]) & 0x8000)
@@ -219,6 +226,58 @@ class SAP2000UIController:
                 press_key("escape")
         except Exception:
             pass
+
+    def _get_menu_handle(self):
+        return user32.GetMenu(self.hwnd_principal)
+
+    def _iter_menu_items(self, menu_handle, prefix: tuple[str, ...] = (), depth: int = 0, max_depth: int = 3):
+        if not menu_handle:
+            return
+        count = int(user32.GetMenuItemCount(menu_handle))
+        for index in range(max(count, 0)):
+            text_buf = ctypes.create_unicode_buffer(256)
+            user32.GetMenuStringW(menu_handle, index, text_buf, 256, MF_BYPOSITION)
+            raw_text = text_buf.value
+            submenu = user32.GetSubMenu(menu_handle, index)
+            item_id = int(user32.GetMenuItemID(menu_handle, index))
+            path = (*prefix, raw_text)
+            yield {"path": path, "text": raw_text, "id": item_id, "submenu": submenu, "depth": depth}
+            if submenu and depth + 1 <= max_depth:
+                yield from self._iter_menu_items(submenu, path, depth + 1, max_depth)
+
+    def _log_menu_snapshot(self, reason: str) -> None:
+        if self._menu_dumped:
+            return
+        self._menu_dumped = True
+        menu_handle = self._get_menu_handle()
+        if not menu_handle:
+            logger.warning("SAP2000 no expone menu Win32 para diagnostico (%s).", reason)
+            return
+        logger.warning("Volcado de menu SAP2000 por %s:", reason)
+        for item in self._iter_menu_items(menu_handle, max_depth=2):
+            text = " > ".join(part for part in item["path"] if part)
+            logger.warning("  menu depth=%s id=%s path=%s", item["depth"], item["id"], text)
+
+    def _find_menu_command_id(self, *needles: str) -> int | None:
+        menu_handle = self._get_menu_handle()
+        if not menu_handle:
+            return None
+        normalized_needles = [needle.strip().lower() for needle in needles if needle.strip()]
+        for item in self._iter_menu_items(menu_handle, max_depth=4):
+            if item["submenu"]:
+                continue
+            haystack = " > ".join(_normalize_menu_text(part) for part in item["path"] if part)
+            if all(needle in haystack for needle in normalized_needles):
+                if item["id"] != -1:
+                    return item["id"]
+        return None
+
+    def _invoke_menu_command(self, command_id: int, pause: float = 0.5) -> None:
+        self._run_guarded(
+            f"invocar comando menu {command_id}",
+            lambda: user32.PostMessageW(self.hwnd_principal, WM_COMMAND, command_id, 0),
+            pause=pause,
+        )
 
     def _run_guarded(self, step: str, action, pause: float = 0.0) -> None:
         self._assert_safe_context(step)
@@ -270,12 +329,15 @@ class SAP2000UIController:
             return False
         try:
             self.activar()
-            self._run_guarded("abrir menu display", lambda: hotkey("alt", "d"), pause=0.3)
-            for idx in range(2):
-                self._run_guarded(f"display down {idx+1}", lambda: press_key("down"), pause=0.1)
-            self._run_guarded("display submenu right", lambda: press_key("right"), pause=0.2)
-            self._run_guarded("display load assigns down", lambda: press_key("down"), pause=0.1)
-            self._run_guarded("abrir dialogo load assigns", lambda: press_key("enter"), pause=0.5)
+            command_id = (
+                self._find_menu_command_id("show load assigns")
+                or self._find_menu_command_id("load assigns", "show")
+            )
+            if command_id is None:
+                self._log_menu_snapshot("no se encontro Show Load Assigns")
+                raise UIAutomationAborted("no se encontro comando de menu Show Load Assigns")
+            logger.info("UI comando Show Load Assigns encontrado: id=%s", command_id)
+            self._invoke_menu_command(command_id, pause=0.7)
             self._run_guarded("seleccionar patron", lambda: hotkey("ctrl", "a"), pause=0.05)
             self._run_guarded("escribir patron", lambda: write_text(patron, interval=0.04), pause=0.2)
             self._run_guarded("confirmar patron", lambda: press_key("enter"), pause=0.4)
@@ -300,13 +362,16 @@ class SAP2000UIController:
         return False
 
     def _abrir_dialogo_set3dview(self) -> None:
-        self._run_guarded("abrir menu view", lambda: hotkey("alt", "v"), pause=0.3)
-        for idx in range(6):
-            self._run_guarded(f"view down {idx+1}", lambda: press_key("down"), pause=0.1)
-        self._run_guarded("view submenu right", lambda: press_key("right"), pause=0.2)
-        for idx in range(5):
-            self._run_guarded(f"rotate 3d down {idx+1}", lambda: press_key("down"), pause=0.1)
-        self._run_guarded("abrir dialogo 3d", lambda: press_key("enter"), pause=0.5)
+        command_id = (
+            self._find_menu_command_id("set 3d view")
+            or self._find_menu_command_id("3d view", "set")
+            or self._find_menu_command_id("rotate 3d", "set")
+        )
+        if command_id is None:
+            self._log_menu_snapshot("no se encontro Set 3D View")
+            raise UIAutomationAborted("no se encontro comando de menu Set 3D View")
+        logger.info("UI comando Set 3D View encontrado: id=%s", command_id)
+        self._invoke_menu_command(command_id, pause=0.7)
 
     def _ingresar_angulos_en_dialogo(self, azimut: float, elevacion: float) -> None:
         try:
