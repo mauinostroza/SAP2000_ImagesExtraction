@@ -1,6 +1,6 @@
 """
 view_controller.py
-Control de vistas, casos de carga y ángulos de cámara en SAP2000 via OAPI.
+Control de vistas, casos de carga y angulos de camara en SAP2000 via OAPI.
 """
 
 from __future__ import annotations
@@ -48,12 +48,20 @@ class ViewController:
 
     def apply(self, cfg: ViewConfig) -> None:
         self._set_display(cfg)
-        self._set_view_angle(cfg)
-        self._zoom_all(cfg.window_number)
-        self._refresh(cfg.window_number)
+        target_window = self._set_view_angle(cfg)
+        self._zoom_all(target_window)
+        self._refresh(target_window)
         total_wait = self._delay + cfg.render_delay
         logger.debug("Esperando %.2fs para render de '%s'", total_wait, cfg.filename)
         time.sleep(total_wait)
+
+    @staticmethod
+    def _window_candidates(window_number: int) -> list[int]:
+        ordered: list[int] = []
+        for candidate in (window_number, 0, 1):
+            if candidate not in ordered:
+                ordered.append(candidate)
+        return ordered
 
     def _set_display(self, cfg: ViewConfig) -> None:
         if cfg.display_type == DisplayType.GEOMETRY_ONLY:
@@ -64,7 +72,7 @@ class ViewController:
                 raise ValueError(f"display_type={cfg.display_type.name} requiere case_name")
             ret = self._m.View.SetActiveDisplayCase(cfg.case_name)
             if ret != 0:
-                raise RuntimeError(f"SetActiveDisplayCase('{cfg.case_name}') retornó {ret}")
+                raise RuntimeError(f"SetActiveDisplayCase('{cfg.case_name}') retorno {ret}")
             return
 
         if cfg.display_type == DisplayType.MODE_SHAPE:
@@ -76,26 +84,42 @@ class ViewController:
             ret = method(cfg.case_name, cfg.mode_number)
             if ret != 0:
                 raise RuntimeError(
-                    f"SetCaseModalShape('{cfg.case_name}', {cfg.mode_number}) retornó {ret}"
+                    f"SetCaseModalShape('{cfg.case_name}', {cfg.mode_number}) retorno {ret}"
                 )
             return
 
         if cfg.display_type == DisplayType.FRAME_FORCES and cfg.case_name:
             ret = self._m.View.SetActiveDisplayCase(cfg.case_name)
             if ret != 0:
-                raise RuntimeError(f"SetActiveDisplayCase('{cfg.case_name}') retornó {ret}")
+                raise RuntimeError(f"SetActiveDisplayCase('{cfg.case_name}') retorno {ret}")
 
-    def _set_view_angle(self, cfg: ViewConfig) -> None:
-        ret = self._m.View.SetView(cfg.window_number, int(cfg.view_type))
-        if ret != 0:
-            raise RuntimeError(f"SetView({cfg.window_number}, {cfg.view_type}) retornó {ret}")
+    def _set_view_angle(self, cfg: ViewConfig) -> int:
+        failures: list[str] = []
+        for window_number in self._window_candidates(cfg.window_number):
+            ret = self._m.View.SetView(window_number, int(cfg.view_type))
+            if ret == 0:
+                if window_number != cfg.window_number:
+                    logger.warning(
+                        "SetView funciono con window_number=%s; el plan pedia %s",
+                        window_number,
+                        cfg.window_number,
+                    )
+                return window_number
+            failures.append(f"{window_number}->{ret}")
+
+        logger.warning(
+            "SetView fallo para '%s' (%s). Se capturara la vista actual de SAP2000.",
+            cfg.filename,
+            ", ".join(failures),
+        )
+        return cfg.window_number
 
     def _zoom_all(self, window_number: int) -> None:
         ret = self._m.View.UnzoomAll(window_number)
         if ret != 0:
-            logger.warning("UnzoomAll(%s) retornó %s", window_number, ret)
+            logger.warning("UnzoomAll(%s) retorno %s", window_number, ret)
 
     def _refresh(self, window_number: int) -> None:
         ret = self._m.View.RefreshView(window_number, True)
         if ret != 0:
-            logger.warning("RefreshView(%s) retornó %s", window_number, ret)
+            logger.warning("RefreshView(%s) retorno %s", window_number, ret)
