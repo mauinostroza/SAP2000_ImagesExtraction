@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 
+from sap_ui_automation import SapUIView
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,9 +44,10 @@ class ViewConfig:
 
 
 class ViewController:
-    def __init__(self, sap_model, base_render_delay: float = 0.5):
+    def __init__(self, sap_model, base_render_delay: float = 0.5, ui_controller=None):
         self._m = sap_model
         self._delay = base_render_delay
+        self._ui = ui_controller
 
     def apply(self, cfg: ViewConfig) -> None:
         self._set_display(cfg)
@@ -66,6 +69,12 @@ class ViewController:
     def _set_display(self, cfg: ViewConfig) -> None:
         if cfg.display_type == DisplayType.GEOMETRY_ONLY:
             return
+
+        if cfg.display_type == DisplayType.LOAD_PATTERN and self._ui is not None:
+            if not cfg.case_name:
+                raise ValueError("LOAD_PATTERN requiere case_name")
+            if self._ui.mostrar_cargas_patron(cfg.case_name):
+                return
 
         if cfg.display_type in (DisplayType.LOAD_PATTERN, DisplayType.LOAD_CASE, DisplayType.DEFORMED):
             if not cfg.case_name:
@@ -116,6 +125,12 @@ class ViewController:
             cfg.filename,
             ", ".join(failures),
         )
+        if self._ui is not None:
+            try:
+                if self._ui.set_vista(SapUIView(int(cfg.view_type))):
+                    return cfg.window_number
+            except Exception as exc:
+                logger.warning("UI set_vista fallo para '%s': %r", cfg.filename, exc)
         return cfg.window_number
 
     def _zoom_all(self, window_number: int) -> None:

@@ -17,7 +17,10 @@ from sap_bridge import SapBridge
 from view_controller import DisplayType, ViewConfig, ViewType
 
 
-CaptureRunner = Callable[[list[ViewConfig], str | Path, str | Path | None, float, bool], int]
+CaptureRunner = Callable[
+    [list[ViewConfig], str | Path, str | Path | None, float, bool, bool, object | None],
+    int,
+]
 
 
 def _default_capture_runner(
@@ -26,22 +29,32 @@ def _default_capture_runner(
     sap_dll_path: str | Path | None,
     render_delay: float,
     verbose: bool,
+    ui_automation_enabled: bool = False,
+    ui_stop_requested: object | None = None,
 ) -> int:
     main_module = sys.modules.get("main")
     if main_module and hasattr(main_module, "run_capture_configs"):
         return main_module.run_capture_configs(
-            configs, output_dir, sap_dll_path, render_delay, verbose
+            configs, output_dir, sap_dll_path, render_delay, verbose, ui_automation_enabled, ui_stop_requested
         )
 
     main_module = sys.modules.get("__main__")
     if main_module and hasattr(main_module, "run_capture_configs"):
         return main_module.run_capture_configs(
-            configs, output_dir, sap_dll_path, render_delay, verbose
+            configs, output_dir, sap_dll_path, render_delay, verbose, ui_automation_enabled, ui_stop_requested
         )
 
     from main import run_capture_configs
 
-    return run_capture_configs(configs, output_dir, sap_dll_path, render_delay, verbose)
+    return run_capture_configs(
+        configs,
+        output_dir,
+        sap_dll_path,
+        render_delay,
+        verbose,
+        ui_automation_enabled,
+        ui_stop_requested,
+    )
 
 
 APP_VERSION = "dev-unknown"
@@ -87,6 +100,7 @@ class SapCaptureGui:
 
         self.is_closing = False
         self.worker_thread: threading.Thread | None = None
+        self.ui_stop_event = threading.Event()
         self.capture_runner = capture_runner or _default_capture_runner
         self.app_version = app_version
         self.catalog: dict[str, list[str]] = {"load_patterns": [], "load_cases": [], "combos": []}
@@ -99,6 +113,7 @@ class SapCaptureGui:
         self.output_dir_var = tk.StringVar(value=output_dir or str(Path.cwd() / "outputs"))
         self.render_delay_var = tk.StringVar(value=str(render_delay))
         self.verbose_var = tk.BooleanVar(value=verbose)
+        self.ui_automation_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Listo. Conecta SAP2000 para cargar patrones y casos.")
         self.catalog_var = tk.StringVar(value="Sin catálogo cargado")
         self.plan_var = tk.StringVar(value=str(self.current_plan_path) if self.current_plan_path else "")
@@ -168,8 +183,17 @@ class SapCaptureGui:
         ttk.Entry(conn, textvariable=self.render_delay_var, width=12).grid(row=2, column=1, sticky="w", padx=6, pady=(8, 0))
         ttk.Checkbutton(conn, text="Verbose", variable=self.verbose_var).grid(row=2, column=2, sticky="e", pady=(8, 0))
 
+        ttk.Checkbutton(
+            conn,
+            text="Permitir automatizacion de teclado",
+            variable=self.ui_automation_var,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Button(conn, text="Detener UI", command=self._stop_ui_automation).grid(
+            row=3, column=2, sticky="ew", pady=(8, 0)
+        )
+
         actions = ttk.Frame(conn)
-        actions.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        actions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         actions.columnconfigure(0, weight=1)
         actions.columnconfigure(1, weight=1)
         actions.columnconfigure(2, weight=1)
@@ -178,7 +202,7 @@ class SapCaptureGui:
         ttk.Button(actions, text="Ejecutar capturas", command=self._run_capture).grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
         ttk.Label(conn, textvariable=self.catalog_var, foreground="#555555").grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(10, 0)
+            row=5, column=0, columnspan=3, sticky="w", pady=(10, 0)
         )
 
         plan_box = ttk.LabelFrame(top, text="Plan", padding=10)
@@ -404,6 +428,11 @@ class SapCaptureGui:
         self.status_var.set(busy_text)
         self.worker_thread = threading.Thread(target=target, daemon=True)
         self.worker_thread.start()
+
+    def _stop_ui_automation(self) -> None:
+        self.ui_stop_event.set()
+        self.status_var.set("Detencion UI solicitada. La automatizacion abortara en el siguiente paso.")
+        logging.warning("Detencion manual de automatizacion UI solicitada.")
 
     def _connect_sap(self) -> None:
         sap_dll = self.sap_dll_var.get().strip() or None
@@ -757,6 +786,8 @@ class SapCaptureGui:
         configs = list(self.configs)
         sap_dll = self.sap_dll_var.get().strip() or None
         verbose = self.verbose_var.get()
+        ui_automation_enabled = self.ui_automation_var.get()
+        self.ui_stop_event.clear()
 
         def worker() -> None:
             try:
@@ -766,6 +797,8 @@ class SapCaptureGui:
                     sap_dll_path=sap_dll,
                     render_delay=render_delay,
                     verbose=verbose,
+                    ui_automation_enabled=ui_automation_enabled,
+                    ui_stop_requested=self.ui_stop_event,
                 )
                 self.log_queue.put(("run_done", exit_code))
             except Exception as exc:

@@ -68,6 +68,8 @@ def run_capture_configs(
     sap_dll_path: str | Path | None,
     render_delay: float,
     verbose: bool,
+    ui_automation_enabled: bool = False,
+    ui_stop_requested=None,
 ) -> int:
     setup_logging(verbose)
     log = logging.getLogger("main")
@@ -78,6 +80,7 @@ def run_capture_configs(
         return 1
 
     ensure_windows("La captura")
+    from sap_ui_automation import SAP2000UIController
     from win32_capture import Win32CaptureEngine, find_sap2000_hwnd, prepare_window_for_capture
 
     hwnd = find_sap2000_hwnd()
@@ -98,7 +101,12 @@ def run_capture_configs(
         log.error("Conexión COM fallida: %s", exc)
         return 1
 
-    view_ctrl = ViewController(bridge.model, base_render_delay=render_delay)
+    ui_ctrl = SAP2000UIController(
+        hwnd,
+        enabled=ui_automation_enabled,
+        stop_requested=ui_stop_requested,
+    )
+    view_ctrl = ViewController(bridge.model, base_render_delay=render_delay, ui_controller=ui_ctrl)
     capture = Win32CaptureEngine(render_delay=0.0)
     writer = OutputWriter(output_dir)
     writer.start_session()
