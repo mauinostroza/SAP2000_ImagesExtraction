@@ -1,6 +1,6 @@
 """
 win32_capture.py
-Motor de captura de ventanas usando PrintWindow (Win32).
+Motor de captura de ventanas usando el contenido visible en pantalla.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ except ImportError:
     Image = None
 
 logger = logging.getLogger(__name__)
+SRCCOPY = 0x00CC0020
 
 
 def _set_dpi_awareness() -> None:
@@ -44,9 +45,9 @@ _set_dpi_awareness()
 
 def _require_win32() -> None:
     if win32gui is None or win32process is None or win32ui is None:
-        raise RuntimeError("pywin32 no está disponible en este entorno.")
+        raise RuntimeError("pywin32 no esta disponible en este entorno.")
     if Image is None:
-        raise RuntimeError("Pillow no está disponible en este entorno.")
+        raise RuntimeError("Pillow no esta disponible en este entorno.")
 
 
 def _normalize_title(text: str) -> str:
@@ -168,8 +169,6 @@ def get_client_rect_on_window(hwnd: int) -> tuple[int, int, int, int]:
 
 
 class Win32CaptureEngine:
-    PW_RENDERFULLCONTENT = 3
-
     def __init__(self, render_delay: float = 0.5):
         self.render_delay = render_delay
 
@@ -186,63 +185,14 @@ class Win32CaptureEngine:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        win_left, win_top, width, height = get_window_rect(hwnd)
-        if width <= 0 or height <= 0:
-            raise RuntimeError(
-                f"Ventana hwnd={hwnd} tiene dimensiones inválidas ({width}x{height})"
-            )
+        if use_client_area:
+            left, top, width, height = self._get_client_screen_rect(hwnd)
+        else:
+            left, top, width, height = self._get_window_screen_rect(hwnd)
 
-        hwnd_dc = win32gui.GetWindowDC(hwnd)
-        mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-        save_dc = mfc_dc.CreateCompatibleDC()
-        bmp = win32ui.CreateBitmap()
-        bmp.CreateCompatibleBitmap(mfc_dc, width, height)
-        save_dc.SelectObject(bmp)
-
-        try:
-            result = ctypes.windll.user32.PrintWindow(
-                hwnd,
-                save_dc.GetSafeHdc(),
-                self.PW_RENDERFULLCONTENT,
-            )
-            if result == 0:
-                result = ctypes.windll.user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), 0)
-            if result == 0:
-                raise RuntimeError(
-                    f"PrintWindow falló para hwnd={hwnd}. "
-                    "Verifica que SAP2000 no esté minimizado."
-                )
-
-            bmpinfo = bmp.GetInfo()
-            bmpbits = bmp.GetBitmapBits(True)
-            image = Image.frombuffer(
-                "RGB",
-                (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
-                bmpbits,
-                "raw",
-                "BGRX",
-                0,
-                1,
-            )
-
-            if use_client_area:
-                client_left, client_top, client_width, client_height = get_client_rect_on_window(hwnd)
-                image = image.crop(
-                    (
-                        client_left,
-                        client_top,
-                        client_left + client_width,
-                        client_top + client_height,
-                    )
-                )
-
-            image.save(str(output_path), format="PNG", optimize=True)
-            return output_path
-        finally:
-            save_dc.DeleteDC()
-            mfc_dc.DeleteDC()
-            win32gui.ReleaseDC(hwnd, hwnd_dc)
-            win32gui.DeleteObject(bmp.GetHandle())
+        image = self._capture_screen_rect(left, top, width, height)
+        image.save(str(output_path), format="PNG", optimize=True)
+        return output_path
 
     def capture_after_render(
         self,
@@ -252,6 +202,50 @@ class Win32CaptureEngine:
     ) -> Path:
         self.wait_render()
         return self.capture(hwnd, output_path, use_client_area)
+
+    def _get_window_screen_rect(self, hwnd: int) -> tuple[int, int, int, int]:
+        left, top, width, height = get_window_rect(hwnd)
+        if width <= 0 or height <= 0:
+            raise RuntimeError(
+                f"Ventana hwnd={hwnd} tiene dimensiones invalidas ({width}x{height})"
+            )
+        return left, top, width, height
+
+    def _get_client_screen_rect(self, hwnd: int) -> tuple[int, int, int, int]:
+        win_left, win_top, _win_width, _win_height = get_window_rect(hwnd)
+        client_left, client_top, client_width, client_height = get_client_rect_on_window(hwnd)
+        if client_width <= 0 or client_height <= 0:
+            raise RuntimeError(
+                f"Area cliente invalida para hwnd={hwnd} ({client_width}x{client_height})"
+            )
+        return win_left + client_left, win_top + client_top, client_width, client_height
+
+    def _capture_screen_rect(self, left: int, top: int, width: int, height: int) -> Image.Image:
+        screen_dc = win32gui.GetDC(0)
+        src_dc = win32ui.CreateDCFromHandle(screen_dc)
+        mem_dc = src_dc.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(src_dc, width, height)
+        mem_dc.SelectObject(bmp)
+
+        try:
+            mem_dc.BitBlt((0, 0), (width, height), src_dc, (left, top), SRCCOPY)
+            bmpinfo = bmp.GetInfo()
+            bmpbits = bmp.GetBitmapBits(True)
+            return Image.frombuffer(
+                "RGB",
+                (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
+                bmpbits,
+                "raw",
+                "BGRX",
+                0,
+                1,
+            )
+        finally:
+            mem_dc.DeleteDC()
+            src_dc.DeleteDC()
+            win32gui.ReleaseDC(0, screen_dc)
+            win32gui.DeleteObject(bmp.GetHandle())
 
 
 if __name__ == "__main__":
@@ -263,7 +257,7 @@ if __name__ == "__main__":
 
     hwnd = find_sap2000_hwnd()
     if hwnd is None:
-        print("\nNo se encontró SAP2000 abierto.")
+        print("\nNo se encontro SAP2000 abierto.")
         sys.exit(1)
 
     print(f"\nSAP2000 encontrado: hwnd={hwnd}")
