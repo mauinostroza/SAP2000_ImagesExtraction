@@ -44,6 +44,9 @@ def _default_capture_runner(
     return run_capture_configs(configs, output_dir, sap_dll_path, render_delay, verbose)
 
 
+APP_VERSION = "dev-unknown"
+
+
 class _QueueLogHandler(logging.Handler):
     def __init__(self, log_queue: queue.Queue):
         super().__init__()
@@ -67,11 +70,12 @@ class SapCaptureGui:
         render_delay: float = 0.5,
         verbose: bool = False,
         capture_runner: CaptureRunner | None = None,
+        app_version: str = APP_VERSION,
     ):
         self.root = root
         self.root.title("SAP2000 Capture")
-        self.root.geometry("1320x860")
-        self.root.minsize(1180, 760)
+        self.root.geometry("1460x860")
+        self.root.minsize(1280, 760)
 
         self.log_queue: queue.Queue = queue.Queue()
         self.log_handler = _QueueLogHandler(self.log_queue)
@@ -84,6 +88,7 @@ class SapCaptureGui:
         self.is_closing = False
         self.worker_thread: threading.Thread | None = None
         self.capture_runner = capture_runner or _default_capture_runner
+        self.app_version = app_version
         self.catalog: dict[str, list[str]] = {"load_patterns": [], "load_cases": [], "combos": []}
         self.configs: list[ViewConfig] = []
         self.selected_index: int | None = None
@@ -97,6 +102,7 @@ class SapCaptureGui:
         self.status_var = tk.StringVar(value="Listo. Conecta SAP2000 para cargar patrones y casos.")
         self.catalog_var = tk.StringVar(value="Sin catálogo cargado")
         self.plan_var = tk.StringVar(value=str(self.current_plan_path) if self.current_plan_path else "")
+        self.runtime_var = tk.StringVar(value=f"Runtime: {self.app_version}")
 
         self.filename_var = tk.StringVar()
         self.description_var = tk.StringVar()
@@ -109,6 +115,7 @@ class SapCaptureGui:
 
         self._build_ui()
         logging.info("Interfaz SAP2000 Capture abierta")
+        logging.info("SAP2000 Capture runtime: %s", self.app_version)
         if self.sap_dll_var.get():
             logging.info("SAP2000 DLL por defecto: %s", self.sap_dll_var.get())
         else:
@@ -127,10 +134,20 @@ class SapCaptureGui:
         container = ttk.Frame(self.root, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=0)
         container.rowconfigure(2, weight=1)
-        container.rowconfigure(3, weight=1)
 
-        top = ttk.Frame(container)
+        main_panel = ttk.Frame(container)
+        main_panel.grid(row=0, column=0, rowspan=4, sticky="nsew", padx=(0, 12))
+        main_panel.columnconfigure(0, weight=1)
+        main_panel.rowconfigure(2, weight=1)
+
+        side_panel = ttk.Frame(container)
+        side_panel.grid(row=0, column=1, rowspan=4, sticky="ns")
+        side_panel.columnconfigure(0, weight=1)
+        side_panel.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(main_panel)
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(0, weight=1)
         top.columnconfigure(1, weight=1)
@@ -179,7 +196,7 @@ class SapCaptureGui:
             foreground="#555555",
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        editor = ttk.LabelFrame(container, text="Definición de captura", padding=10)
+        editor = ttk.LabelFrame(main_panel, text="Definición de captura", padding=10)
         editor.grid(row=1, column=0, sticky="ew", pady=(10, 10))
         for idx in range(7):
             editor.columnconfigure(idx, weight=1)
@@ -255,7 +272,7 @@ class SapCaptureGui:
         ttk.Button(form_actions, text="Actualizar fila", command=self._update_selected,).grid(row=0, column=1, padx=4)
         ttk.Button(form_actions, text="Agregar fila", command=self._add_config).grid(row=0, column=2, padx=(4, 0))
 
-        list_box = ttk.LabelFrame(container, text="Capturas programadas", padding=10)
+        list_box = ttk.LabelFrame(main_panel, text="Capturas programadas", padding=10)
         list_box.grid(row=2, column=0, sticky="nsew")
         list_box.columnconfigure(0, weight=1)
         list_box.rowconfigure(0, weight=1)
@@ -294,16 +311,23 @@ class SapCaptureGui:
         ttk.Button(list_actions, text="Eliminar", command=self._delete_selected).grid(row=0, column=3, sticky="ew", padx=4)
         ttk.Button(list_actions, text="Nuevo plan", command=self._reset_plan).grid(row=0, column=4, sticky="ew", padx=(4, 0))
 
-        log_box = ttk.LabelFrame(container, text="Log", padding=10)
-        log_box.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        runtime_box = ttk.LabelFrame(side_panel, text="Sesión", padding=10)
+        runtime_box.grid(row=0, column=0, sticky="ew")
+        runtime_box.columnconfigure(0, weight=1)
+        ttk.Label(runtime_box, textvariable=self.runtime_var, foreground="#555555").grid(
+            row=0, column=0, sticky="w"
+        )
+
+        log_box = ttk.LabelFrame(side_panel, text="Log", padding=10)
+        log_box.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         log_box.columnconfigure(0, weight=1)
         log_box.rowconfigure(0, weight=1)
 
-        self.log_text = ScrolledText(log_box, wrap="word", height=10, state="disabled")
+        self.log_text = ScrolledText(log_box, wrap="word", width=42, state="disabled")
         self.log_text.grid(row=0, column=0, sticky="nsew")
 
-        status = ttk.Label(container, textvariable=self.status_var)
-        status.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        status = ttk.Label(main_panel, textvariable=self.status_var)
+        status.grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
     def _browse_dll(self) -> None:
         current = self.sap_dll_var.get().strip()
@@ -759,6 +783,7 @@ class SapCaptureGui:
 def launch_gui_app(
     argv: list[str] | None = None,
     capture_runner: CaptureRunner | None = None,
+    app_version: str = APP_VERSION,
 ) -> None:
     parser = argparse.ArgumentParser(
         prog="sap_capture_gui",
@@ -780,6 +805,7 @@ def launch_gui_app(
         render_delay=args.render_delay,
         verbose=args.verbose,
         capture_runner=capture_runner,
+        app_version=app_version,
     )
     root.mainloop()
 

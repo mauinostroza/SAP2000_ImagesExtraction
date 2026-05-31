@@ -24,6 +24,8 @@ from sap_bridge import SapBridge
 from view_controller import ViewConfig
 from view_controller import ViewController
 
+APP_VERSION = "dev-2026-05-30-02"
+
 
 def setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -56,7 +58,7 @@ def cmd_list_cases(bridge: SapBridge) -> None:
 def launch_gui(argv: list[str] | None = None) -> int:
     from sap2000_gui import launch_gui_app
 
-    launch_gui_app(argv, capture_runner=run_capture_configs)
+    launch_gui_app(argv, capture_runner=run_capture_configs, app_version=APP_VERSION)
     return 0
 
 
@@ -69,6 +71,7 @@ def run_capture_configs(
 ) -> int:
     setup_logging(verbose)
     log = logging.getLogger("main")
+    log.info("SAP2000 Capture runtime: %s", APP_VERSION)
 
     if not configs:
         log.error("El plan está vacío.")

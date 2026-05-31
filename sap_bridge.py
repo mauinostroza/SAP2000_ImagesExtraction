@@ -13,14 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_SAP_DLL_CANDIDATES = (
-    r"C:\Program Files\Computers and Structures\SAP2000 26\SAP2000v1.dll",
-    r"C:\Program Files\Computers and Structures\SAP2000 25\SAP2000v1.dll",
-    r"C:\Program Files\Computers and Structures\SAP2000 24\SAP2000v1.dll",
     r"C:\Program Files\Computers and Structures\SAP2000 23\SAP2000v1.dll",
-    r"C:\Program Files (x86)\Computers and Structures\SAP2000 26\SAP2000v1.dll",
-    r"C:\Program Files (x86)\Computers and Structures\SAP2000 25\SAP2000v1.dll",
-    r"C:\Program Files (x86)\Computers and Structures\SAP2000 24\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 24\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 25\SAP2000v1.dll",
+    r"C:\Program Files\Computers and Structures\SAP2000 26\SAP2000v1.dll",
     r"C:\Program Files (x86)\Computers and Structures\SAP2000 23\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 24\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 25\SAP2000v1.dll",
+    r"C:\Program Files (x86)\Computers and Structures\SAP2000 26\SAP2000v1.dll",
 )
 
 
