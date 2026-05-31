@@ -118,6 +118,7 @@ class SapBridge:
 
         self._model = self._sap_object.SapModel
         logger.info("Conexion COM a SAP2000 establecida")
+        self.log_api_snapshot()
 
     def disconnect(self) -> None:
         self._model = None
@@ -255,6 +256,52 @@ class SapBridge:
             "load_cases": self.get_load_case_names(),
             "combos": self.get_combo_names(),
         }
+
+    def log_api_snapshot(self) -> None:
+        try:
+            model = self.model
+        except Exception as exc:
+            logger.debug("No se pudo inspeccionar SapModel: %s", exc)
+            return
+
+        try:
+            model_names = [name for name in dir(model) if not name.startswith("_")]
+        except Exception as exc:
+            logger.debug("dir(SapModel) fallo: %s", exc)
+            model_names = []
+
+        logger.info("SapModel type: %s", type(model))
+        if model_names:
+            logger.info("SapModel miembros visibles: %s", ", ".join(model_names[:40]))
+        else:
+            logger.info("SapModel miembros visibles: <ninguno>")
+
+        for attr_name in ("View", "LoadPatterns", "LoadCases", "RespCombo", "Results"):
+            try:
+                attr_value = getattr(model, attr_name, None)
+            except Exception as exc:
+                logger.info("SapModel.%s acceso fallo: %r", attr_name, exc)
+                continue
+
+            if attr_value is None:
+                logger.info("SapModel.%s: <None>", attr_name)
+                continue
+
+            try:
+                child_names = [name for name in dir(attr_value) if not name.startswith("_")]
+            except Exception as exc:
+                logger.info("SapModel.%s dir fallo: %r", attr_name, exc)
+                continue
+
+            logger.info("SapModel.%s type: %s", attr_name, type(attr_value))
+            if child_names:
+                logger.info(
+                    "SapModel.%s miembros visibles: %s",
+                    attr_name,
+                    ", ".join(child_names[:50]),
+                )
+            else:
+                logger.info("SapModel.%s miembros visibles: <ninguno>", attr_name)
 
     @staticmethod
     def check_ret(ret: int, operation: str) -> None:
