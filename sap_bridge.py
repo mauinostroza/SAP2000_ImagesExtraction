@@ -1,6 +1,6 @@
 """
 sap_bridge.py
-Conexión COM a SAP2000 ya abierto y acceso a SapModel.
+Conexion COM a SAP2000 ya abierto y acceso a SapModel.
 """
 
 from __future__ import annotations
@@ -47,17 +47,39 @@ class SapBridge:
         if path is not None:
             return path
         logger.warning(
-            "SAP2000v1.dll no encontrado en rutas estándar. "
-            "Pasa --sap-dll explícitamente si hace falta."
+            "SAP2000v1.dll no encontrado en rutas estandar. "
+            "Pasa --sap-dll explicitamente si hace falta."
         )
         return None
+
+    def _iter_typelib_candidates(self) -> list[Path]:
+        if self._dll_path is None:
+            return []
+
+        sibling_names = [
+            f"{self._dll_path.stem}.tlb",
+            "SAP2000v1.tlb",
+            "SAP2000.tlb",
+            "CSiAPIv1.tlb",
+            self._dll_path.name,
+        ]
+        candidates: list[Path] = []
+        seen: set[Path] = set()
+        for name in sibling_names:
+            candidate = self._dll_path.with_name(name)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.exists():
+                candidates.append(candidate)
+        return candidates
 
     def connect(self) -> None:
         try:
             import comtypes
             import comtypes.client
         except ImportError as exc:
-            raise ImportError("comtypes no está instalado. Ejecuta: pip install comtypes") from exc
+            raise ImportError("comtypes no esta instalado. Ejecuta: pip install comtypes") from exc
 
         self._comtypes = comtypes
         try:
@@ -66,12 +88,17 @@ class SapBridge:
         except Exception as exc:
             logger.debug("CoInitialize no se pudo ejecutar en este thread: %s", exc)
 
-        if self._dll_path and self._dll_path.exists():
+        typelib_loaded = False
+        for typelib_path in self._iter_typelib_candidates():
             try:
-                comtypes.client.GetModule(str(self._dll_path))
-                logger.debug("Wrappers comtypes generados desde DLL")
+                comtypes.client.GetModule(str(typelib_path))
+                logger.info("Wrappers comtypes generados desde: %s", typelib_path)
+                typelib_loaded = True
+                break
             except Exception as exc:
-                logger.warning("GetModule falló (%s), intentando conexión directa", exc)
+                logger.warning("GetModule fallo para %s (%s)", typelib_path, exc)
+        if not typelib_loaded and self._dll_path:
+            logger.warning("No se pudo cargar type library; se intentara conexion directa")
 
         try:
             helper = comtypes.client.CreateObject("SAP2000v1.Helper")
@@ -86,17 +113,17 @@ class SapBridge:
             self._uninitialize_com()
             raise RuntimeError(
                 f"No se pudo conectar a SAP2000: {exc}\n"
-                "Verifica que SAP2000 esté abierto y el modelo cargado."
+                "Verifica que SAP2000 este abierto y el modelo cargado."
             ) from exc
 
         self._model = self._sap_object.SapModel
-        logger.info("Conexión COM a SAP2000 establecida")
+        logger.info("Conexion COM a SAP2000 establecida")
 
     def disconnect(self) -> None:
         self._model = None
         self._sap_object = None
         self._uninitialize_com()
-        logger.info("Conexión COM liberada")
+        logger.info("Conexion COM liberada")
 
     def _uninitialize_com(self) -> None:
         if not self._com_initialized or self._comtypes is None:
@@ -104,7 +131,7 @@ class SapBridge:
         try:
             self._comtypes.CoUninitialize()
         except Exception as exc:
-            logger.debug("CoUninitialize falló: %s", exc)
+            logger.debug("CoUninitialize fallo: %s", exc)
         finally:
             self._com_initialized = False
             self._comtypes = None
@@ -112,7 +139,7 @@ class SapBridge:
     @property
     def model(self):
         if self._model is None:
-            raise RuntimeError("No hay conexión activa. Llama connect() primero.")
+            raise RuntimeError("No hay conexion activa. Llama connect() primero.")
         return self._model
 
     def __enter__(self):
@@ -198,7 +225,7 @@ class SapBridge:
                     return []
                 if isinstance(result, int):
                     if result != 0:
-                        logger.warning("%s retornó %s", operation, result)
+                        logger.warning("%s retorno %s", operation, result)
                     return []
                 names = self._coerce_names(result)
                 if names:
