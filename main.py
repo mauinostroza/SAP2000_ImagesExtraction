@@ -78,7 +78,7 @@ def run_capture_configs(
         return 1
 
     ensure_windows("La captura")
-    from win32_capture import Win32CaptureEngine, find_sap2000_hwnd
+    from win32_capture import Win32CaptureEngine, find_sap2000_hwnd, prepare_window_for_capture
 
     hwnd = find_sap2000_hwnd()
     if hwnd is None:
@@ -88,6 +88,7 @@ def run_capture_configs(
         )
         return 1
     log.info("Ventana SAP2000 encontrada: hwnd=%s", hwnd)
+    prepare_window_for_capture(hwnd)
 
     log.info("Conectando a SAP2000 via COM...")
     bridge = SapBridge(sap_dll_path=sap_dll_path)
