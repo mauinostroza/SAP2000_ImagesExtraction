@@ -21,6 +21,8 @@ KEYEVENTF_UNICODE = 0x0004
 VK_SHIFT = 0x10
 MF_BYPOSITION = 0x400
 WM_COMMAND = 0x0111
+GA_ROOT = 2
+GA_ROOTOWNER = 3
 
 VK_MAP = {
     "alt": 0x12,
@@ -192,6 +194,7 @@ class SAP2000UIController:
             raise TypeError("stop_requested debe ser callable, Event o None")
         self.sap_pid = self._get_window_pid(hwnd)
         self._menu_dumped = False
+        self._sent_input = False
 
     def _is_escape_pressed(self) -> bool:
         return bool(user32.GetAsyncKeyState(VK_MAP["escape"]) & 0x8000)
@@ -208,7 +211,32 @@ class SAP2000UIController:
         hwnd = self._get_foreground_hwnd()
         if hwnd == 0:
             return False
-        return self._get_window_pid(hwnd) == self.sap_pid
+        return self._window_is_sap_context(hwnd)
+
+    def _get_ancestor(self, hwnd: int, flag: int) -> int:
+        return int(user32.GetAncestor(hwnd, flag))
+
+    def _window_is_sap_context(self, hwnd: int) -> bool:
+        if hwnd == 0:
+            return False
+        if self._get_window_pid(hwnd) != self.sap_pid:
+            return False
+        if hwnd == self.hwnd_principal:
+            return True
+        root = self._get_ancestor(hwnd, GA_ROOT)
+        root_owner = self._get_ancestor(hwnd, GA_ROOTOWNER)
+        return self.hwnd_principal in {root, root_owner}
+
+    def _get_window_text(self, hwnd: int) -> str:
+        length = int(user32.GetWindowTextLengthW(hwnd))
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        return buffer.value
+
+    def _get_class_name(self, hwnd: int) -> str:
+        buffer = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, buffer, 256)
+        return buffer.value
 
     def _assert_safe_context(self, step: str) -> None:
         if not self.enabled:
@@ -221,6 +249,9 @@ class SAP2000UIController:
             raise UIAutomationAborted(f"foco fuera de SAP2000 antes de {step}")
 
     def _cancel_if_possible(self) -> None:
+        if not self._sent_input:
+            logger.info("UI abortada antes de enviar teclas; no se enviara Escape de limpieza.")
+            return
         try:
             if self._foreground_belongs_to_sap():
                 press_key("escape")
@@ -252,6 +283,8 @@ class SAP2000UIController:
         menu_handle = self._get_menu_handle()
         if not menu_handle:
             logger.warning("SAP2000 no expone menu Win32 para diagnostico (%s).", reason)
+            self._log_window_context(reason)
+            self._log_child_windows_snapshot(reason)
             return
         logger.warning("Volcado de menu SAP2000 por %s:", reason)
         for item in self._iter_menu_items(menu_handle, max_depth=2):
@@ -281,16 +314,61 @@ class SAP2000UIController:
 
     def _run_guarded(self, step: str, action, pause: float = 0.0) -> None:
         self._assert_safe_context(step)
+        self._sent_input = True
         action()
         if pause > 0:
             time.sleep(pause)
         self._assert_safe_context(step)
 
+    def _log_window_context(self, reason: str) -> None:
+        hwnd = self._get_foreground_hwnd()
+        if hwnd == 0:
+            logger.warning("No hay ventana foreground durante %s.", reason)
+            return
+        logger.warning(
+            "Foreground durante %s: hwnd=%s pid=%s class=%r title=%r root=%s root_owner=%s",
+            reason,
+            hwnd,
+            self._get_window_pid(hwnd),
+            self._get_class_name(hwnd),
+            self._get_window_text(hwnd),
+            self._get_ancestor(hwnd, GA_ROOT),
+            self._get_ancestor(hwnd, GA_ROOTOWNER),
+        )
+
+    def _log_child_windows_snapshot(self, reason: str, max_items: int = 80) -> None:
+        logger.warning("Volcado de ventanas hijas SAP2000 por %s:", reason)
+        items: list[tuple[int, int, str, str]] = []
+
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def callback(hwnd, _lparam):
+            items.append(
+                (
+                    int(hwnd),
+                    self._get_window_pid(int(hwnd)),
+                    self._get_class_name(int(hwnd)),
+                    self._get_window_text(int(hwnd)),
+                )
+            )
+            return len(items) < max_items
+
+        user32.EnumChildWindows(self.hwnd_principal, enum_proc(callback), 0)
+        if not items:
+            logger.warning("  sin ventanas hijas enumerables")
+            return
+        for hwnd, pid, class_name, title in items:
+            logger.warning("  child hwnd=%s pid=%s class=%r title=%r", hwnd, pid, class_name, title)
+
     def activar(self) -> None:
         user32.ShowWindow(self.hwnd_principal, 5)
         user32.SetForegroundWindow(self.hwnd_principal)
         time.sleep(0.25)
-        self._assert_safe_context("activar ventana")
+        try:
+            self._assert_safe_context("activar ventana")
+        except UIAutomationAborted:
+            self._log_window_context("activar ventana")
+            raise
 
     def set_vista(
         self,
@@ -311,6 +389,7 @@ class SAP2000UIController:
         if elevation is not None:
             elevacion = elevation
         logger.info("UI vista %s -> az=%s el=%s", view_type.name, azimut, elevacion)
+        self._sent_input = False
         self.activar()
         try:
             self._abrir_dialogo_set3dview()
@@ -320,6 +399,7 @@ class SAP2000UIController:
             return True
         except UIAutomationAborted as exc:
             logger.warning("Automatizacion UI abortada en vista: %s", exc)
+            self._log_window_context("aborto vista")
             self._cancel_if_possible()
             return False
 
@@ -328,6 +408,7 @@ class SAP2000UIController:
             logger.info("Automatizacion UI desarmada; no se enviaran teclas para cargas.")
             return False
         try:
+            self._sent_input = False
             self.activar()
             command_id = (
                 self._find_menu_command_id("show load assigns")
@@ -344,6 +425,7 @@ class SAP2000UIController:
             return True
         except UIAutomationAborted as exc:
             logger.warning("Automatizacion UI abortada en cargas: %s", exc)
+            self._log_window_context("aborto cargas")
             self._cancel_if_possible()
             return False
         except Exception as exc:
