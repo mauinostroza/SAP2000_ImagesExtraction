@@ -258,6 +258,8 @@ class SapBridge:
         }
 
     def log_api_snapshot(self) -> None:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
         try:
             model = self.model
         except Exception as exc:
@@ -270,38 +272,38 @@ class SapBridge:
             logger.debug("dir(SapModel) fallo: %s", exc)
             model_names = []
 
-        logger.info("SapModel type: %s", type(model))
+        logger.debug("SapModel type: %s", type(model))
         if model_names:
-            logger.info("SapModel miembros visibles: %s", ", ".join(model_names[:40]))
+            logger.debug("SapModel miembros visibles: %s", ", ".join(model_names[:40]))
         else:
-            logger.info("SapModel miembros visibles: <ninguno>")
+            logger.debug("SapModel miembros visibles: <ninguno>")
 
         for attr_name in ("View", "LoadPatterns", "LoadCases", "RespCombo", "Results"):
             try:
                 attr_value = getattr(model, attr_name, None)
             except Exception as exc:
-                logger.info("SapModel.%s acceso fallo: %r", attr_name, exc)
+                logger.debug("SapModel.%s acceso fallo: %r", attr_name, exc)
                 continue
 
             if attr_value is None:
-                logger.info("SapModel.%s: <None>", attr_name)
+                logger.debug("SapModel.%s: <None>", attr_name)
                 continue
 
             try:
                 child_names = [name for name in dir(attr_value) if not name.startswith("_")]
             except Exception as exc:
-                logger.info("SapModel.%s dir fallo: %r", attr_name, exc)
+                logger.debug("SapModel.%s dir fallo: %r", attr_name, exc)
                 continue
 
-            logger.info("SapModel.%s type: %s", attr_name, type(attr_value))
+            logger.debug("SapModel.%s type: %s", attr_name, type(attr_value))
             if child_names:
-                logger.info(
+                logger.debug(
                     "SapModel.%s miembros visibles: %s",
                     attr_name,
                     ", ".join(child_names[:50]),
                 )
             else:
-                logger.info("SapModel.%s miembros visibles: <ninguno>", attr_name)
+                logger.debug("SapModel.%s miembros visibles: <ninguno>", attr_name)
 
     @staticmethod
     def check_ret(ret: int, operation: str) -> None:

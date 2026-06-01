@@ -21,6 +21,9 @@ KEYEVENTF_UNICODE = 0x0004
 VK_SHIFT = 0x10
 MF_BYPOSITION = 0x400
 WM_COMMAND = 0x0111
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+MK_LBUTTON = 0x0001
 GA_ROOT = 2
 GA_ROOTOWNER = 3
 
@@ -73,6 +76,10 @@ class UIAutomationAborted(RuntimeError):
 
 def _normalize_menu_text(text: str) -> str:
     return text.replace("&", "").split("\t", 1)[0].strip().lower()
+
+
+def _make_lparam(low: int, high: int) -> int:
+    return ((high & 0xFFFF) << 16) | (low & 0xFFFF)
 
 
 def _vk_for_key(key: str) -> int:
@@ -238,6 +245,41 @@ class SAP2000UIController:
         user32.GetClassNameW(hwnd, buffer, 256)
         return buffer.value
 
+    def _iter_child_windows(self, parent_hwnd: int, max_items: int = 200):
+        items: list[int] = []
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def callback(hwnd, _lparam):
+            items.append(int(hwnd))
+            return len(items) < max_items
+
+        user32.EnumChildWindows(parent_hwnd, enum_proc(callback), 0)
+        return items
+
+    def _find_child_by_title(self, title: str) -> int | None:
+        needle = _normalize_menu_text(title)
+        for hwnd in self._iter_child_windows(self.hwnd_principal):
+            current = _normalize_menu_text(self._get_window_text(hwnd))
+            if current == needle:
+                return hwnd
+        return None
+
+    def _click_child_center(self, child_hwnd: int, pause: float = 0.4) -> None:
+        rect = ctypes.wintypes.RECT()
+        if not user32.GetClientRect(child_hwnd, ctypes.byref(rect)):
+            raise RuntimeError(f"No se pudo leer client rect de hwnd={child_hwnd}")
+        x = max(1, (rect.right - rect.left) // 2)
+        y = max(1, (rect.bottom - rect.top) // 2)
+        lparam = _make_lparam(x, y)
+        self._run_guarded(
+            f"click child hwnd={child_hwnd}",
+            lambda: (
+                user32.PostMessageW(child_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam),
+                user32.PostMessageW(child_hwnd, WM_LBUTTONUP, 0, lparam),
+            ),
+            pause=pause,
+        )
+
     def _assert_safe_context(self, step: str) -> None:
         if not self.enabled:
             raise UIAutomationAborted("automatizacion UI no armada")
@@ -338,27 +380,39 @@ class SAP2000UIController:
 
     def _log_child_windows_snapshot(self, reason: str, max_items: int = 80) -> None:
         logger.warning("Volcado de ventanas hijas SAP2000 por %s:", reason)
-        items: list[tuple[int, int, str, str]] = []
-
-        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-
-        def callback(hwnd, _lparam):
-            items.append(
-                (
-                    int(hwnd),
-                    self._get_window_pid(int(hwnd)),
-                    self._get_class_name(int(hwnd)),
-                    self._get_window_text(int(hwnd)),
-                )
+        items = [
+            (
+                hwnd,
+                self._get_window_pid(hwnd),
+                self._get_class_name(hwnd),
+                self._get_window_text(hwnd),
             )
-            return len(items) < max_items
-
-        user32.EnumChildWindows(self.hwnd_principal, enum_proc(callback), 0)
+            for hwnd in self._iter_child_windows(self.hwnd_principal, max_items=max_items)
+        ]
         if not items:
             logger.warning("  sin ventanas hijas enumerables")
             return
         for hwnd, pid, class_name, title in items:
             logger.warning("  child hwnd=%s pid=%s class=%r title=%r", hwnd, pid, class_name, title)
+
+    def _log_process_windows_snapshot(self, reason: str, max_items: int = 80) -> None:
+        logger.warning("Volcado de ventanas top-level SAP2000 por %s:", reason)
+        items: list[tuple[int, int, str, str]] = []
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def callback(hwnd, _lparam):
+            hwnd = int(hwnd)
+            if self._get_window_pid(hwnd) != self.sap_pid:
+                return True
+            items.append((hwnd, self._get_window_pid(hwnd), self._get_class_name(hwnd), self._get_window_text(hwnd)))
+            return len(items) < max_items
+
+        user32.EnumWindows(enum_proc(callback), 0)
+        if not items:
+            logger.warning("  sin ventanas top-level del proceso")
+            return
+        for hwnd, pid, class_name, title in items:
+            logger.warning("  top hwnd=%s pid=%s class=%r title=%r", hwnd, pid, class_name, title)
 
     def activar(self) -> None:
         user32.ShowWindow(self.hwnd_principal, 5)
@@ -451,9 +505,29 @@ class SAP2000UIController:
         )
         if command_id is None:
             self._log_menu_snapshot("no se encontro Set 3D View")
+            self._probe_view_control()
             raise UIAutomationAborted("no se encontro comando de menu Set 3D View")
         logger.info("UI comando Set 3D View encontrado: id=%s", command_id)
         self._invoke_menu_command(command_id, pause=0.7)
+
+    def _probe_view_control(self) -> None:
+        child_hwnd = self._find_child_by_title("View")
+        if child_hwnd is None:
+            logger.warning("No se encontro control hijo 'View' para sondeo.")
+            self._log_process_windows_snapshot("sin control View")
+            return
+        logger.warning("Sondeo seguro sobre control hijo 'View': hwnd=%s", child_hwnd)
+        try:
+            self._click_child_center(child_hwnd, pause=0.6)
+        except UIAutomationAborted:
+            raise
+        except Exception as exc:
+            logger.warning("No se pudo clickear control 'View': %r", exc)
+            self._log_process_windows_snapshot("fallo click View")
+            return
+        self._log_window_context("post click View")
+        self._log_process_windows_snapshot("post click View")
+        self._log_child_windows_snapshot("post click View")
 
     def _ingresar_angulos_en_dialogo(self, azimut: float, elevacion: float) -> None:
         try:

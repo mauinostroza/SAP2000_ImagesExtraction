@@ -1,6 +1,12 @@
 import unittest
 
-from sap_ui_automation import GA_ROOT, GA_ROOTOWNER, SAP2000UIController, _normalize_menu_text
+from sap_ui_automation import (
+    GA_ROOT,
+    GA_ROOTOWNER,
+    SAP2000UIController,
+    _make_lparam,
+    _normalize_menu_text,
+)
 
 
 class SapUiAutomationTests(unittest.TestCase):
@@ -26,6 +32,9 @@ class SapUiAutomationTests(unittest.TestCase):
         self.assertTrue(controller._window_is_sap_context(100))
         self.assertTrue(controller._window_is_sap_context(101))
         self.assertFalse(controller._window_is_sap_context(102))
+
+    def test_make_lparam_packs_coordinates(self):
+        self.assertEqual(_make_lparam(10, 20), (20 << 16) | 10)
 
 
 if __name__ == "__main__":
